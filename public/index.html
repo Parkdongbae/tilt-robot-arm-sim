@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>기울기 로봇팔 시뮬레이터</title>
+<style>
+  :root {
+    --panel: rgba(12, 17, 28, .78);
+    --line: rgba(255, 255, 255, .12);
+    --text: #eef3ff;
+    --muted: #9fb0d0;
+    --accent: #4ea1ff;
+    --ok: #3ddc84;
+    --warn: #ffb547;
+    --bad: #ff5d6c;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color: var(--text);
+    font-family: system-ui, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
+  canvas { display: block; }
+  .panel { position: absolute; background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 12px 14px; backdrop-filter: blur(6px); }
+  #mission { top: 16px; left: 16px; width: 340px; }
+  #mission .stage { font-size: 12px; color: var(--muted); letter-spacing: .08em; display: flex; justify-content: space-between; }
+  #mission h2 { margin: 4px 0 6px; font-size: 20px; }
+  #mission p { margin: 0 0 8px; font-size: 13px; color: var(--muted); line-height: 1.5; }
+  #tasks { list-style: none; padding: 0; margin: 0; font-size: 14px; }
+  #tasks li { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+  #tasks li.done { color: var(--ok); text-decoration: line-through; }
+  .chip { width: 14px; height: 14px; border-radius: 4px; flex: none; border: 1px solid rgba(255,255,255,.4); }
+  #timer { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  #timer.low { color: var(--bad); }
+  .diff { display: inline-block; margin-top: 6px; font-size: 12px; padding: 2px 8px; border-radius: 99px; background: rgba(255,255,255,.1); }
+  #status { top: 16px; right: 16px; display: flex; gap: 8px; align-items: center; font-size: 13px; }
+  .pill { padding: 6px 10px; border-radius: 99px; background: rgba(255,255,255,.08); display: flex; align-items: center; gap: 6px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); }
+  .dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  #status button, .btn { font: inherit; color: var(--text); background: rgba(255,255,255,.1); border: 1px solid var(--line);
+    border-radius: 99px; padding: 6px 12px; cursor: pointer; }
+  #status button:hover, .btn:hover { background: rgba(255,255,255,.2); }
+  #joints { left: 16px; bottom: 16px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 230px; }
+  #joints div { display: flex; justify-content: space-between; gap: 14px; padding: 1px 0; }
+  #joints b { color: var(--text); font-weight: 600; }
+  #help { right: 16px; bottom: 16px; font-size: 12px; color: var(--muted); line-height: 1.6; max-width: 330px; }
+  #help b { color: var(--text); }
+  #theme { left: 50%; bottom: 16px; transform: translateX(-50%); font-size: 13px; padding: 6px 14px; border-radius: 99px; }
+  #score { top: 16px; left: 50%; transform: translateX(-50%); font-size: 15px; padding: 8px 18px; border-radius: 99px; }
+  #connect { top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(760px, calc(100vw - 32px)); padding: 22px 24px; text-align: center; }
+  #connect h1 { margin: 0 0 6px; font-size: 24px; }
+  #connect > p { margin: 0 0 16px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+  .qrs { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .qr { background: rgba(255,255,255,.05); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  .qr h3 { margin: 0 0 4px; font-size: 16px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+  .qr .desc { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .qr .code { background: #fff; border-radius: 8px; padding: 8px; width: 190px; height: 190px; margin: 0 auto; }
+  .qr .code svg { width: 100%; height: 100%; display: block; }
+  .qr .url { font-size: 12px; margin-top: 8px; word-break: break-all; color: var(--accent); user-select: all; }
+  #connect .actions { margin-top: 16px; display: flex; gap: 10px; justify-content: center; }
+  #connect .actions .btn { padding: 10px 22px; font-size: 15px; }
+  #connect .actions .primary { background: var(--accent); color: #001; border-color: transparent; font-weight: 700; }
+  #connect .note { font-size: 12px; color: var(--muted); margin-top: 12px; line-height: 1.6; }
+  #banner { position: absolute; top: 38%; left: 50%; transform: translate(-50%, -50%) scale(.9); text-align: center;
+    opacity: 0; transition: opacity .3s, transform .3s; pointer-events: none; text-shadow: 0 4px 24px rgba(0,0,0,.6); }
+  #banner.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  #banner .big { font-size: 52px; font-weight: 800; }
+  #banner .small { font-size: 20px; margin-top: 6px; color: #dfe8ff; }
+  #banner.success .big { color: var(--ok); }
+  #banner.fail .big { color: var(--bad); }
+  #banner.warn .big { color: var(--warn); }
+  .hidden { display: none !important; }
+  @media (max-width: 1100px) {
+    #score { top: auto; bottom: 64px; }
+    #help { display: none; }
+  }
+</style>
+<script type="importmap">
+  { "imports": { "three": "/vendor/three/build/three.module.js" } }
+</script>
+</head>
+<body>
+<div id="mission" class="panel">
+  <div class="stage"><span id="stageNo">STAGE 1</span><span id="timer"></span></div>
+  <h2 id="mTitle">-</h2>
+  <p id="mDesc"></p>
+  <ul id="tasks"></ul>
+  <span class="diff" id="diff">난이도 ★</span>
+</div>
+
+<div id="score" class="panel">점수 <b id="scoreVal">0</b></div>
+
+<div id="status" class="panel">
+  <span class="pill"><i class="dot" id="dLeft"></i>왼쪽 폰 (팔)</span>
+  <span class="pill"><i class="dot" id="dRight"></i>오른쪽 폰 (집게)</span>
+  <button id="btnConnect">📱 연결 QR</button>
+</div>
+
+<div id="joints" class="panel">
+  <div>베이스 회전 <b id="jYaw">0°</b></div>
+  <div>어깨 <b id="jSh">0°</b></div>
+  <div>팔꿈치 <b id="jEl">0°</b></div>
+  <div>집게 닫힘 <b id="jGrip">0%</b></div>
+  <div>시점 <b id="jCam">기본</b></div>
+</div>
+
+<div id="theme" class="panel">배경: -</div>
+
+<div id="help" class="panel">
+  <b>키보드로도 테스트할 수 있어요</b><br>
+  A/D 베이스 · W/S 어깨 · R/F 팔꿈치<br>
+  Space 누르기 집게 닫기 · G 집게 잠금<br>
+  Q/E 배경 전환 · C 시점 · Backspace 다시하기<br>
+  N 다음 단계로 건너뛰기 · H 이 도움말 숨기기
+</div>
+
+<div id="connect" class="panel">
+  <h1>🦾 기울기 로봇팔 시뮬레이터</h1>
+  <p>PC와 스마트폰 2대를 <b>같은 Wi‑Fi</b>에 연결한 뒤, 각 폰으로 QR 코드를 찍어 접속하세요.<br>
+     "연결이 비공개로 설정되어 있지 않습니다" 경고가 나오면 <b>[고급] → [계속/방문]</b>을 누르면 됩니다.</p>
+  <div class="qrs">
+    <div class="qr">
+      <h3><i class="dot" id="qLeft"></i>왼쪽 폰 · 로봇팔</h3>
+      <div class="desc">기울여서 베이스·어깨·팔꿈치 3축 조종</div>
+      <div class="code" id="qrLeft"></div>
+      <div class="url" id="urlLeft"></div>
+    </div>
+    <div class="qr">
+      <h3><i class="dot" id="qRight"></i>오른쪽 폰 · 집게/배경</h3>
+      <div class="desc">숙여서 집게 닫기 · 휙 기울여 배경 전환</div>
+      <div class="code" id="qrRight"></div>
+      <div class="url" id="urlRight"></div>
+    </div>
+  </div>
+  <div class="actions">
+    <button class="btn primary" id="btnStart">시작하기</button>
+  </div>
+  <div class="note" id="ipNote"></div>
+</div>
+
+<div id="banner"><div class="big" id="bBig"></div><div class="small" id="bSmall"></div></div>
+
+<script type="module" src="sim.js"></script>
+</body>
+</html>

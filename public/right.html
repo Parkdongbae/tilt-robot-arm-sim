@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0f1420">
+<title>오른쪽 조종기 · 집게/배경</title>
+<link rel="stylesheet" href="phone.css">
+<style>
+  .role { background: var(--warn); }
+  .grip-vis { display: flex; justify-content: center; align-items: flex-end; gap: 0; height: 90px; }
+  .claw { width: 16px; height: 70px; background: var(--warn); border-radius: 6px; transition: transform .06s linear; transform-origin: 50% 0; }
+  .claw.l { margin-right: 40px; }
+  .bg-name { text-align: center; font-size: 15px; font-weight: 700; margin-top: 4px; }
+  .flick { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; font-size: 12px; color: var(--muted); gap: 6px; margin-top: 8px; }
+  .flick .bar .fill { background: var(--warn); }
+</style>
+</head>
+<body>
+<header>
+  <h1>✊ 집게 · 배경</h1>
+  <span class="role">오른쪽 폰</span>
+</header>
+<div class="status">
+  <span><i class="dot" id="dServer"></i>서버</span>
+  <span><i class="dot" id="dDisplay"></i>시뮬레이터</span>
+  <span><i class="dot" id="dSensor"></i>센서</span>
+</div>
+
+<div class="card">
+  <div class="grip-vis"><div class="claw l" id="clawL"></div><div class="claw r" id="clawR"></div></div>
+  <div class="meter"><span>집게 닫힘</span><div class="bar"><i class="fill" id="bGrip" style="left:0"></i></div><span class="val" id="vGrip">0</span></div>
+  <div class="flick"><span>◀ 이전 배경</span><div class="bar" style="width:120px"><i class="center"></i><i class="fill" id="bFlick"></i></div><span style="text-align:right">다음 배경 ▶</span></div>
+  <div class="bg-name" id="bgName">배경: -</div>
+</div>
+
+<div class="card">
+  <p class="help">
+    폰을 <b>화면이 위로 오게 눕혀서</b> 잡으세요.<br>
+    · <b>앞으로 숙이기</b> → 집게 닫기 (많이 숙일수록 꽉)<br>
+    · <b>뒤로 되돌리기</b> → 집게 열기 (물건 놓기)<br>
+    · <b>좌/우로 휙 기울였다 돌아오기</b> → 배경 전환<br>
+    · 집게를 계속 쥐고 있기 힘들면 <b>집게 잠금</b>을 누르세요.
+  </p>
+</div>
+
+<div class="grow">
+  <div class="row3">
+    <button id="btnPrev">◀ 배경</button>
+    <button id="btnCam">🎥 시점</button>
+    <button id="btnNext">배경 ▶</button>
+  </div>
+  <div class="row">
+    <button id="btnCal">⊙ 영점 맞추기</button>
+    <button id="btnRestart">↺ 미션 다시</button>
+  </div>
+  <button id="btnLock" class="big">🔒 집게 잠금: 끔</button>
+</div>
+
+<div class="overlay" id="overlay">
+  <h1>✊ 오른쪽 폰 · 집게/배경 조종기</h1>
+  <p>폰을 화면이 위로 오도록 편하게 눕혀 잡은 뒤<br>아래 버튼을 눌러 주세요.</p>
+  <button id="btnStart">시작하기</button>
+  <p id="startErr" class="err"></p>
+</div>
+<div class="toast" id="toast"></div>
+
+<script type="module">
+import { createController, axis } from './controller.js';
+
+const $ = (id) => document.getElementById(id);
+const toast = (t) => { $('toast').textContent = t; $('toast').classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => $('toast').classList.remove('show'), 1600); };
+
+const ctl = createController({
+  role: 'right',
+  onStatus: (s) => { $('dServer').classList.toggle('on', s.server); $('dDisplay').classList.toggle('on', s.display); },
+  onFeedback: (m) => {
+    if (m.text) toast(m.text);
+    if (m.background) $('bgName').textContent = '배경: ' + m.background;
+  },
+});
+
+let zero = null;
+let locked = false;
+let grip = 0;
+let flickArmed = true;
+let lastFlick = 0;
+
+function calibrate() {
+  zero = { beta: ctl.raw.beta, gamma: ctl.raw.gamma };
+  toast('영점을 맞췄어요');
+}
+const event = (name) => { ctl.send({ type: 'event', name }); if (navigator.vibrate) navigator.vibrate(25); };
+
+ctl.onSensor((r) => {
+  $('dSensor').classList.add('on');
+  if (!zero) return;
+  const db = r.beta - zero.beta;
+  const dg = r.gamma - zero.gamma;
+
+  // 앞으로 숙일수록 집게가 닫힘
+  const tiltGrip = Math.max(0, -axis(db, 7, 32));
+  grip = locked ? 1 : tiltGrip;
+
+  // 좌우로 휙 → 배경 전환 (돌아와야 다시 동작)
+  const f = axis(dg, 0, 38);
+  const fb = $('bFlick');
+  const w = Math.abs(f) * 50;
+  fb.style.left = f >= 0 ? '50%' : (50 - w) + '%';
+  fb.style.width = w + '%';
+  const now = performance.now();
+  if (flickArmed && Math.abs(dg) > 38 && now - lastFlick > 700) {
+    flickArmed = false;
+    lastFlick = now;
+    event(dg > 0 ? 'bg_next' : 'bg_prev');
+  }
+  if (Math.abs(dg) < 15) flickArmed = true;
+});
+
+setInterval(() => {
+  if (!zero) return;
+  ctl.send({ type: 'grip', value: grip });
+  $('bGrip').style.width = (grip * 100) + '%';
+  $('vGrip').textContent = (grip * 100).toFixed(0);
+  const a = 28 - grip * 28;
+  $('clawL').style.transform = `rotate(${a}deg)`;
+  $('clawR').style.transform = `rotate(${-a}deg)`;
+}, 33);
+
+$('btnPrev').onclick = () => event('bg_prev');
+$('btnNext').onclick = () => event('bg_next');
+$('btnCam').onclick = () => event('camera');
+$('btnRestart').onclick = () => event('restart');
+$('btnCal').onclick = calibrate;
+$('btnLock').onclick = () => {
+  locked = !locked;
+  $('btnLock').textContent = `🔒 집게 잠금: ${locked ? '켬 (꽉 쥠)' : '끔'}`;
+  $('btnLock').classList.toggle('active', locked);
+};
+
+$('btnStart').onclick = async () => {
+  $('startErr').textContent = '';
+  try {
+    await ctl.start();
+    calibrate();
+    $('overlay').style.display = 'none';
+  } catch (e) {
+    $('startErr').textContent = e.message;
+  }
+};
+</script>
+</body>
+</html>

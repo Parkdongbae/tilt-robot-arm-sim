@@ -1,0 +1,16 @@
+{
+  "name": "tilt-robot-arm-sim",
+  "version": "1.0.0",
+  "description": "스마트폰 기울기 센서로 조종하는 3축 로봇팔 시뮬레이터",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "selfsigned": "^5.5.0",
+    "three": "^0.160.0",
+    "ws": "^8.22.2"
+  }
+}
