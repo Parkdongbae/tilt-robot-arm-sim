@@ -1,4 +1,4 @@
-// 배경 테마: 오른쪽 폰으로 전환
+// 배경 테마: 폰의 배경 버튼(또는 Q/E 키)으로 전환
 import * as THREE from 'three';
 
 const rand = (a, b) => a + Math.random() * (b - a);

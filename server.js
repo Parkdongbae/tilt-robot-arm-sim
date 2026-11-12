@@ -1,6 +1,6 @@
 // 로봇팔 시뮬레이터 서버
 // - PC 화면(시뮬레이터): http://localhost:3000
-// - 스마트폰 조종기: https://<PC의 IP>:3443/left.html , /right.html
+// - 스마트폰 조종기: https://<PC의 IP>:3443/phone.html
 //   (스마트폰 기울기 센서는 HTTPS에서만 동작하므로 자체 서명 인증서를 씁니다)
 const http = require('http');
 const https = require('https');
@@ -70,10 +70,8 @@ function makeHandler(ips) {
       const base = `https://${ip}:${HTTPS_PORT}`;
       const info = {
         ips,
-        left: `${base}/left.html`,
-        right: `${base}/right.html`,
-        leftQR: await QRCode.toString(`${base}/left.html`, { type: 'svg', margin: 1 }),
-        rightQR: await QRCode.toString(`${base}/right.html`, { type: 'svg', margin: 1 }),
+        phone: `${base}/phone.html`,
+        phoneQR: await QRCode.toString(`${base}/phone.html`, { type: 'svg', margin: 1 }),
       };
       res.writeHead(200, { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' });
       return res.end(JSON.stringify(info));
@@ -99,8 +97,8 @@ function makeHandler(ips) {
 }
 
 // ---- WebSocket 중계 ----
-// 접속자는 첫 메시지로 {type:'hello', role:'display'|'left'|'right'} 를 보냅니다.
-// 폰(left/right)이 보낸 메시지는 모든 display 로 전달하고,
+// 접속자는 첫 메시지로 {type:'hello', role:'display'|'phone'} 를 보냅니다.
+// 폰이 보낸 메시지는 모든 display 로 전달하고,
 // 폰 연결 상태가 바뀌면 display 에 알려줍니다.
 const clients = new Set();
 
@@ -110,11 +108,8 @@ function broadcastToDisplays(obj) {
 }
 
 function sendStatus() {
-  const status = { type: 'status', left: false, right: false };
-  for (const c of clients) {
-    if (c.role === 'left') status.left = true;
-    if (c.role === 'right') status.right = true;
-  }
+  const status = { type: 'status', phone: false };
+  for (const c of clients) if (c.role === 'phone') status.phone = true;
   broadcastToDisplays(status);
   // 폰에게도 시뮬레이터 연결 여부를 알려 줌
   const hasDisplay = [...clients].some((c) => c.role === 'display');
@@ -131,18 +126,18 @@ function attachWS(server) {
       let m;
       try { m = JSON.parse(data); } catch { return; }
       if (m.type === 'hello') {
-        ws.role = ['display', 'left', 'right'].includes(m.role) ? m.role : null;
+        ws.role = ['display', 'phone'].includes(m.role) ? m.role : null;
         console.log(`[연결] ${ws.role}`);
         sendStatus();
         return;
       }
-      if (ws.role === 'left' || ws.role === 'right') {
+      if (ws.role === 'phone') {
         m.from = ws.role;
         broadcastToDisplays(m);
       } else if (ws.role === 'display' && m.type === 'feedback') {
         // 시뮬레이터 → 폰 (진동 등 피드백)
         const msg = JSON.stringify(m);
-        for (const c of clients) if (c.role === m.to && c.readyState === 1) c.send(msg);
+        for (const c of clients) if (c.role === 'phone' && c.readyState === 1) c.send(msg);
       }
     });
     ws.on('close', () => {
@@ -169,8 +164,7 @@ function attachWS(server) {
       console.log('');
       console.log('=== 기울기 로봇팔 시뮬레이터 ===');
       console.log(`PC 시뮬레이터 화면 : http://localhost:${HTTP_PORT}`);
-      console.log(`왼쪽 폰 (로봇팔)    : https://${ip}:${HTTPS_PORT}/left.html`);
-      console.log(`오른쪽 폰 (집게/배경): https://${ip}:${HTTPS_PORT}/right.html`);
+      console.log(`스마트폰 조종기     : https://${ip}:${HTTPS_PORT}/phone.html`);
       if (ips.length > 1) console.log(`(다른 IP 후보: ${ips.slice(1).join(', ')})`);
       console.log('폰과 PC는 같은 Wi-Fi 에 연결되어 있어야 합니다.');
       console.log('폰에서 "안전하지 않음" 경고가 뜨면 [고급] → [계속/방문] 을 누르세요.');

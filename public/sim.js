@@ -1,5 +1,7 @@
 // 3축 로봇팔 시뮬레이터 (PC 화면)
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { THEMES, applyTheme } from './themes.js';
 import { buildMission, COLORS, polar } from './missions.js';
 
@@ -12,6 +14,8 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
 document.body.prepend(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -78,10 +82,42 @@ const LIMITS = {
 const joint = { yaw: 0, shoulder: 85 * DEG, elbow: -95 * DEG };
 const HOME = { ...joint };
 
+// ---- 금속 재질 ----
+// 주변 환경을 반사하도록 환경맵을 만들어 금속 재질에만 적용
+const pmrem = new THREE.PMREMGenerator(renderer);
+const envMap = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+// 브러시드(헤어라인) 금속 결 텍스처
+function brushedTexture() {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 64;
+  const g = c.getContext('2d');
+  g.fillStyle = '#8a8a8a';
+  g.fillRect(0, 0, 512, 64);
+  for (let i = 0; i < 1400; i++) {
+    const v = (100 + Math.random() * 90) | 0;
+    g.strokeStyle = `rgba(${v},${v},${v},0.35)`;
+    g.lineWidth = 0.2 + Math.random() * 1.1;
+    const x = Math.random() * 512, y = Math.random() * 64;
+    g.beginPath();
+    g.moveTo(x, y);
+    g.lineTo(x + 40 + Math.random() * 260, y);
+    g.stroke();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(2, 1);
+  return t;
+}
+const brushed = brushedTexture();
+const metal = (o) => new THREE.MeshPhysicalMaterial({ envMap, envMapIntensity: 1, metalness: 1, ...o });
 const mat = {
-  arm: new THREE.MeshStandardMaterial({ color: 0xff8a1f, metalness: 0.35, roughness: 0.45 }),
-  dark: new THREE.MeshStandardMaterial({ color: 0x2a2f3a, metalness: 0.6, roughness: 0.4 }),
-  steel: new THREE.MeshStandardMaterial({ color: 0xc9ced8, metalness: 0.8, roughness: 0.25 }),
+  alu: metal({ color: 0xeef1f6, roughness: 1, roughnessMap: brushed, envMapIntensity: 1.4, clearcoat: 0.3, clearcoatRoughness: 0.3 }),
+  gun: metal({ color: 0x4a505a, roughness: 0.42, clearcoat: 0.6, clearcoatRoughness: 0.15 }),
+  chrome: metal({ color: 0xffffff, roughness: 0.07 }),
+  brass: metal({ color: 0xd8a465, roughness: 0.28 }),
+  rubber: new THREE.MeshStandardMaterial({ color: 0x15171b, roughness: 0.92, metalness: 0 }),
+  glow: new THREE.MeshStandardMaterial({ color: 0x0a2230, emissive: 0x38d6ff, emissiveIntensity: 2.4 }),
 };
 function mesh(geo, m, shadow = true) {
   const o = new THREE.Mesh(geo, m);
@@ -89,52 +125,154 @@ function mesh(geo, m, shadow = true) {
   o.receiveShadow = shadow;
   return o;
 }
+const rbox = (w, h, d, r, m) => mesh(new RoundedBoxGeometry(w, h, d, 4, r), m);
+const cyl = (rt, rb, h, m, seg = 48) => mesh(new THREE.CylinderGeometry(rt, rb, h, seg), m);
+// 관절 허브: z축 방향 원통 + 크롬 캡 + 황동 링 + 볼트
+function hub(r, len) {
+  const g = new THREE.Group();
+  const core = cyl(r, r, len, mat.gun);
+  core.rotation.x = Math.PI / 2;
+  const cap = cyl(r * 0.62, r * 0.62, len + 0.05, mat.chrome);
+  cap.rotation.x = Math.PI / 2;
+  g.add(core, cap);
+  for (const s of [-1, 1]) {
+    const ring = cyl(r * 1.05, r * 1.05, 0.025, mat.brass);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.z = s * (len / 2 - 0.035);
+    g.add(ring);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const bolt = cyl(r * 0.09, r * 0.09, 0.02, mat.gun, 6);
+      bolt.rotation.x = Math.PI / 2;
+      bolt.position.set(Math.cos(a) * r * 0.42, Math.sin(a) * r * 0.42, s * (len / 2 + 0.03));
+      g.add(bolt);
+    }
+  }
+  return g;
+}
+// 링크 옆면의 장식 패널 + 발광 라인 (z = ±side)
+function sidePanels(parent, x, len, h, side) {
+  for (const s of [-1, 1]) {
+    const panel = rbox(len, h, 0.02, 0.008, mat.gun);
+    panel.position.set(x, 0, s * side);
+    const line = mesh(new THREE.BoxGeometry(len * 0.82, 0.014, 0.006), mat.glow, false);
+    line.position.set(x, 0, s * (side + 0.011));
+    parent.add(panel, line);
+  }
+}
 
 const armRoot = new THREE.Group();
 scene.add(armRoot);
-const base = mesh(new THREE.CylinderGeometry(0.6, 0.68, 0.22, 40), mat.dark);
-base.position.y = 0.11;
-armRoot.add(base);
 
+// 받침대
+const plinth = cyl(0.8, 0.84, 0.06, mat.gun);
+plinth.position.y = 0.03;
+const baseGlow = mesh(new THREE.TorusGeometry(0.76, 0.012, 8, 96), mat.glow, false);
+baseGlow.rotation.x = Math.PI / 2;
+baseGlow.position.y = 0.065;
+const housing = cyl(0.6, 0.66, 0.16, mat.alu);
+housing.position.y = 0.14;
+const topRing = cyl(0.61, 0.61, 0.02, mat.chrome);
+topRing.position.y = 0.228;
+armRoot.add(plinth, baseGlow, housing, topRing);
+for (let i = 0; i < 10; i++) {
+  const a = (i / 10) * Math.PI * 2;
+  const bolt = cyl(0.028, 0.028, 0.03, mat.gun, 6);
+  bolt.position.set(Math.cos(a) * 0.53, 0.245, Math.sin(a) * 0.53);
+  armRoot.add(bolt);
+}
+
+// 회전 몸체 (베이스 회전)
 const yawG = new THREE.Group();
 armRoot.add(yawG);
-const turret = mesh(new THREE.CylinderGeometry(0.38, 0.45, 0.5, 32), mat.arm);
-turret.position.y = 0.47;
-yawG.add(turret);
-const shJoint = mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.56, 24), mat.dark);
-shJoint.rotation.x = Math.PI / 2;
-shJoint.position.y = SHOULDER_Y;
-yawG.add(shJoint);
+const bearing = cyl(0.48, 0.48, 0.05, mat.gun);
+bearing.position.y = 0.26;
+const turret = cyl(0.36, 0.44, 0.34, mat.alu);
+turret.position.y = 0.45;
+const turretGlow = mesh(new THREE.TorusGeometry(0.416, 0.011, 8, 80), mat.glow, false);
+turretGlow.rotation.x = Math.PI / 2;
+turretGlow.position.y = 0.4;
+const turretCap = cyl(0.3, 0.36, 0.05, mat.gun);
+turretCap.position.y = 0.645;
+yawG.add(bearing, turret, turretGlow, turretCap);
+for (const s of [-1, 1]) {   // 어깨를 잡아 주는 양쪽 지지판
+  const plate = rbox(0.46, 0.5, 0.07, 0.03, mat.alu);
+  plate.position.set(0, 0.72, s * 0.205);
+  yawG.add(plate);
+}
+const shHub = hub(0.2, 0.52);
+shHub.position.y = SHOULDER_Y;
+yawG.add(shHub);
 
+// 위팔 (어깨)
 const shG = new THREE.Group();
 shG.position.y = SHOULDER_Y;
 yawG.add(shG);
-const upper = mesh(new THREE.BoxGeometry(L1, 0.22, 0.26), mat.arm);
+const upper = rbox(L1 - 0.22, 0.21, 0.2, 0.07, mat.alu);
 upper.position.x = L1 / 2;
 shG.add(upper);
-const elJoint = mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.4, 24), mat.dark);
-elJoint.rotation.x = Math.PI / 2;
-elJoint.position.x = L1;
-shG.add(elJoint);
+sidePanels(shG, L1 / 2, L1 * 0.62, 0.075, 0.101);
+const cable = mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([
+  new THREE.Vector3(0.05, 0.2, 0.07),
+  new THREE.Vector3(L1 * 0.3, 0.15, 0.075),
+  new THREE.Vector3(L1 * 0.7, 0.15, 0.075),
+  new THREE.Vector3(L1 - 0.05, 0.19, 0.07),
+]), 40, 0.022, 8), mat.rubber);
+shG.add(cable);
+const elHub = hub(0.16, 0.42);
+elHub.position.x = L1;
+shG.add(elHub);
 
+// 아래팔 (팔꿈치)
 const elG = new THREE.Group();
 elG.position.x = L1;
 shG.add(elG);
-const fore = mesh(new THREE.BoxGeometry(L2, 0.17, 0.2), mat.arm);
-fore.position.x = L2 / 2;
-elG.add(fore);
+const motor = cyl(0.13, 0.13, 0.36, mat.gun);
+motor.rotation.z = Math.PI / 2;
+motor.position.x = 0.3;
+const motorRing = cyl(0.135, 0.135, 0.03, mat.brass);
+motorRing.rotation.z = Math.PI / 2;
+motorRing.position.x = 0.46;
+const fore = rbox(L2 - 0.36, 0.15, 0.16, 0.055, mat.alu);
+fore.position.x = (L2 + 0.36) / 2;
+elG.add(motor, motorRing, fore);
+sidePanels(elG, (L2 + 0.4) / 2, (L2 - 0.4) * 0.8, 0.055, 0.081);
 
-const wrG = new THREE.Group();      // 손목: 집게가 항상 바닥을 향하도록 자동 수평 유지
+// 손목 + 집게 (집게가 항상 바닥을 향하도록 손목은 자동 수평 유지)
+const wrG = new THREE.Group();
 wrG.position.x = L2;
 elG.add(wrG);
-wrG.add(mesh(new THREE.SphereGeometry(0.13, 20, 14), mat.dark));
-const palm = mesh(new THREE.BoxGeometry(0.12, 0.18, 0.72), mat.steel);
-palm.position.x = 0.14;
-wrG.add(palm);
-const fingerGeo = new THREE.BoxGeometry(0.38, 0.1, 0.06);
-const fingerL = mesh(fingerGeo, mat.steel);
-const fingerR = mesh(fingerGeo, mat.steel);
-fingerL.position.x = fingerR.position.x = 0.2 + 0.19;
+const wrHub = cyl(0.11, 0.11, 0.24, mat.gun);
+wrHub.rotation.x = Math.PI / 2;
+const wrCap = cyl(0.07, 0.07, 0.28, mat.chrome);
+wrCap.rotation.x = Math.PI / 2;
+const flange = cyl(0.15, 0.15, 0.035, mat.chrome);
+flange.rotation.z = Math.PI / 2;
+flange.position.x = 0.09;
+const palm = rbox(0.1, 0.18, 0.74, 0.035, mat.gun);
+palm.position.x = 0.155;
+const rail = cyl(0.018, 0.018, 0.7, mat.chrome, 16);
+rail.rotation.x = Math.PI / 2;
+rail.position.x = 0.215;
+const palmGlow = mesh(new THREE.BoxGeometry(0.01, 0.02, 0.4), mat.glow, false);
+palmGlow.position.set(0.155, 0.091, 0);
+wrG.add(wrHub, wrCap, flange, palm, rail, palmGlow);
+
+function makeFinger(side) {
+  const g = new THREE.Group();
+  const body = rbox(0.38, 0.1, 0.06, 0.022, mat.alu);
+  const knuckle = rbox(0.09, 0.13, 0.09, 0.028, mat.gun);
+  knuckle.position.x = -0.15;
+  const pad = mesh(new THREE.BoxGeometry(0.22, 0.08, 0.014), mat.rubber);
+  pad.position.set(0.06, 0, -side * 0.036);   // 안쪽 면의 고무 패드
+  const tipCap = rbox(0.04, 0.1, 0.062, 0.015, mat.chrome);
+  tipCap.position.x = 0.19;
+  g.add(body, knuckle, pad, tipCap);
+  g.position.x = 0.2 + 0.19;
+  return g;
+}
+const fingerL = makeFinger(1);
+const fingerR = makeFinger(-1);
 wrG.add(fingerL, fingerR);
 const grabPoint = new THREE.Object3D();
 grabPoint.position.x = GRAB;
@@ -416,15 +554,14 @@ function poseInvalid() {
 
 // ---------------- 입력 ----------------
 const input = {
-  left: { yaw: 0, shoulder: 0, elbow: 0, speed: 1, t: 0 },
-  right: { grip: 0, t: 0 },
+  phone: { yaw: 0, shoulder: 0, elbow: 0, grip: 0, speed: 1, t: 0 },
   keys: new Set(),
   keyLock: false,
 };
-const conn = { left: false, right: false };
+const conn = { phone: false };
 
-function feedback(to, data) {
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'feedback', to, ...data }));
+function feedback(data) {
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'feedback', ...data }));
 }
 
 let ws;
@@ -436,19 +573,17 @@ function connectWS() {
     try { m = JSON.parse(e.data); } catch { return; }
     const now = performance.now();
     if (m.type === 'status') {
-      conn.left = m.left; conn.right = m.right;
-      $('dLeft').classList.toggle('on', m.left);
-      $('dRight').classList.toggle('on', m.right);
-      $('qLeft').classList.toggle('on', m.left);
-      $('qRight').classList.toggle('on', m.right);
-      if (m.right) feedback('right', { background: THEMES[state.themeIndex].name });
-      // 폰 2대가 모두 연결되면 자동으로 시작
-      if (m.left && m.right && state.phase === 'intro') setTimeout(startFromIntro, 1200);
-    } else if (m.type === 'arm') {
-      Object.assign(input.left, { yaw: +m.yaw || 0, shoulder: +m.shoulder || 0, elbow: +m.elbow || 0, speed: +m.speed || 1, t: now });
-    } else if (m.type === 'grip') {
-      input.right.grip = Math.max(0, Math.min(1, +m.value || 0));
-      input.right.t = now;
+      conn.phone = m.phone;
+      $('dPhone').classList.toggle('on', m.phone);
+      $('qPhone').classList.toggle('on', m.phone);
+      if (m.phone) feedback({ background: THEMES[state.themeIndex].name });
+      // 폰이 연결되면 자동으로 시작
+      if (m.phone && state.phase === 'intro') setTimeout(startFromIntro, 1200);
+    } else if (m.type === 'ctrl') {
+      Object.assign(input.phone, {
+        yaw: +m.yaw || 0, shoulder: +m.shoulder || 0, elbow: +m.elbow || 0,
+        grip: Math.max(0, Math.min(1, +m.grip || 0)), speed: +m.speed || 1, t: now,
+      });
     } else if (m.type === 'event') {
       handleEvent(m.name);
     }
@@ -484,7 +619,7 @@ function setTheme(i) {
   state.themeIndex = (i + THEMES.length) % THEMES.length;
   const name = applyTheme(themeCtx, state.themeIndex);
   $('theme').textContent = `배경: ${name}  (${state.themeIndex + 1}/${THEMES.length})`;
-  feedback('right', { background: name });
+  feedback({ background: name });
   if (state.phase === 'play') showBanner(name, '배경 전환', '', 1100);
 }
 
@@ -496,6 +631,7 @@ function setCam(i) {
 const camTarget = new THREE.Vector3(0, 0.5, -1);
 const camLook = new THREE.Vector3(0, 0.5, -1);
 function updateCamera(dt) {
+  if (state.camFreeze) return;   // 디버그: 카메라 고정
   const tip = tipPoint.getWorldPosition(new THREE.Vector3());
   const want = new THREE.Vector3();
   const look = new THREE.Vector3();
@@ -590,7 +726,7 @@ function completeTask(t, o) {
   o.mesh.material.emissiveIntensity = 0.35;
   burst(o.mesh.position.clone().add(new THREE.Vector3(0, o.hy, 0)), COLORS[o.color].hex);
   chord([660, 880]);
-  feedback('right', { vibrate: 60, text: '✔ 성공!' });
+  feedback({ vibrate: 60, text: '✔ 성공!' });
   state.score += 100;
   renderTasks();
   if (state.tasks.every((x) => x.done)) missionSuccess();
@@ -602,8 +738,7 @@ function missionSuccess() {
   state.score += bonus;
   chord([523, 659, 784, 1046]);
   showBanner('미션 성공!', `시간 보너스 +${bonus} · 다음 단계로 이동합니다`, 'success', 2600);
-  feedback('left', { vibrate: [100, 60, 100], text: '미션 성공!' });
-  feedback('right', { vibrate: [100, 60, 100], text: '미션 성공!' });
+  feedback({ vibrate: [100, 60, 100], text: '미션 성공!' });
   setTimeout(() => nextMission(), 2800);
 }
 
@@ -612,8 +747,7 @@ function missionFail() {
   beep(220, 0.5, 'sawtooth', 0.1);
   if (state.held) releaseHeld();
   showBanner('시간 초과!', '같은 단계를 다시 시작합니다', 'fail', 2600);
-  feedback('left', { vibrate: 300, text: '시간 초과' });
-  feedback('right', { vibrate: 300, text: '시간 초과' });
+  feedback({ vibrate: 300, text: '시간 초과' });
   setTimeout(() => restartMission(), 2800);
 }
 
@@ -654,7 +788,7 @@ function tryGrab() {
   wrG.attach(best.mesh);
   state.held = best;
   beep(880, 0.08, 'square', 0.06);
-  feedback('right', { vibrate: 40 });
+  feedback({ vibrate: 40 });
 }
 
 function releaseHeld() {
@@ -686,7 +820,7 @@ function tick(now) {
   state.clock += dt;
 
   // 입력 합치기 (폰 신호가 0.5초 이상 끊기면 정지)
-  const L = now - input.left.t < 500 ? input.left : { yaw: 0, shoulder: 0, elbow: 0, speed: 1 };
+  const L = now - input.phone.t < 500 ? input.phone : { yaw: 0, shoulder: 0, elbow: 0, grip: 0, speed: 1 };
   const k = input.keys;
   const key = (a, b) => (k.has(a) ? 1 : 0) - (k.has(b) ? 1 : 0);
   const target = {
@@ -713,7 +847,7 @@ function tick(now) {
   }
 
   // 집게
-  const R = now - input.right.t < 500 ? input.right.grip : 0;
+  const R = L.grip;
   state.grip = playing ? Math.max(R, k.has('Space') ? 1 : 0, input.keyLock ? 1 : 0) : 0;
   state.gripVis += (state.grip - state.gripVis) * (1 - Math.exp(-dt * 14));
   if (!state.held && state.grip > 0.55) tryGrab();
@@ -804,10 +938,8 @@ addEventListener('resize', () => {
 async function loadConnectInfo() {
   try {
     const info = await (await fetch('/api/info')).json();
-    $('qrLeft').innerHTML = info.leftQR;
-    $('qrRight').innerHTML = info.rightQR;
-    $('urlLeft').textContent = info.left;
-    $('urlRight').textContent = info.right;
+    $('qrPhone').innerHTML = info.phoneQR;
+    $('urlPhone').textContent = info.phone;
     $('ipNote').textContent = info.ips.length > 1
       ? `QR로 접속이 안 되면 주소의 IP를 다음 중 하나로 바꿔 보세요: ${info.ips.join(', ')}`
       : '폰이 접속되지 않으면 PC 방화벽에서 Node.js 허용 여부를 확인하세요.';
@@ -831,4 +963,4 @@ loadMission(state.level);
 requestAnimationFrame(frame);
 
 // 디버그용 (브라우저 콘솔에서 상태 확인)
-window.__sim = { state, joint, input, tipPoint, grabPoint, tick };
+window.__sim = { state, joint, input, tipPoint, grabPoint, tick, camera };

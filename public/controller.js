@@ -1,4 +1,4 @@
-// 스마트폰 조종기 공통 코드: 서버 연결, 센서 권한, 화면 꺼짐 방지, 영점 보정
+// 스마트폰 조종기 코드: 서버 연결, 센서 권한, 화면 꺼짐 방지
 export function createController({ role, onStatus, onFeedback }) {
   let ws = null;
   let open = false;

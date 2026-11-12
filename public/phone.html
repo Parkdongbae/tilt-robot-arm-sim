@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0f1420">
+<title>로봇팔 조종기</title>
+<link rel="stylesheet" href="phone.css">
+<style>
+  .pad { display: grid; grid-template-columns: 1fr 1.15fr; gap: 10px; }
+  .pad .col { display: grid; grid-template-rows: 1fr 1fr; gap: 10px; }
+  .pad button { padding: 0; min-height: 84px; font-size: 16px; }
+  #btnGrip { font-size: 20px; min-height: 178px; }
+  #btnGrip.active { background: var(--warn); }
+  .grip-state { text-align: center; font-size: 13px; color: var(--muted); margin-top: 4px; }
+  .grip-state b { color: var(--warn); }
+  .small button { padding: 11px 6px; font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🦾 로봇팔 조종기</h1>
+  <div class="status">
+    <span><i class="dot" id="dServer"></i>서버</span>
+    <span><i class="dot" id="dDisplay"></i>PC</span>
+    <span><i class="dot" id="dSensor"></i>센서</span>
+  </div>
+</header>
+
+<div class="card">
+  <div class="tilt-vis"><div class="phone" id="phoneVis"></div></div>
+  <div class="meter"><span>베이스 회전</span><div class="bar"><i class="center"></i><i class="fill" id="bYaw"></i></div><span class="val" id="vYaw">0</span></div>
+  <div class="meter"><span>어깨</span><div class="bar"><i class="center"></i><i class="fill" id="bSh"></i></div><span class="val" id="vSh">0</span></div>
+  <div class="meter"><span>팔꿈치</span><div class="bar"><i class="center"></i><i class="fill" id="bEl"></i></div><span class="val" id="vEl">0</span></div>
+  <div class="grip-state">집게: <b id="gripText">열림</b> · <span id="bgName">배경 -</span></div>
+</div>
+
+<p class="help">
+  화면이 위로 오게 눕혀 두 손으로 잡으세요.
+  <b>좌우 기울기</b> → 베이스 회전 · <b>앞뒤 기울기</b> → 어깨 ·
+  <b>왼쪽 버튼</b> → 팔꿈치 · <b>오른쪽 버튼</b> → 집기/놓기
+</p>
+
+<div class="grow">
+  <div class="row3 small">
+    <button id="btnPrev">◀ 배경</button>
+    <button id="btnCam">🎥 시점</button>
+    <button id="btnNext">배경 ▶</button>
+  </div>
+  <div class="row3 small">
+    <button id="btnCal">⊙ 영점</button>
+    <button id="btnSpeed">속도: 보통</button>
+    <button id="btnRestart">↺ 다시</button>
+  </div>
+  <div class="pad">
+    <div class="col">
+      <button id="btnUp">▲<br>팔꿈치 올리기</button>
+      <button id="btnDown">▼<br>팔꿈치 내리기</button>
+    </div>
+    <button id="btnGrip">✊<br>집기</button>
+  </div>
+</div>
+
+<div class="overlay" id="overlay">
+  <h1>🦾 로봇팔 조종기</h1>
+  <p>폰을 화면이 위로 오도록 편하게 눕혀 잡은 뒤<br>아래 버튼을 눌러 주세요.<br>누른 순간의 자세가 기준(영점)이 됩니다.</p>
+  <button id="btnStart">시작하기</button>
+  <p id="startErr" class="err"></p>
+</div>
+<div class="toast" id="toast"></div>
+
+<script type="module">
+import { createController, axis } from './controller.js';
+
+const $ = (id) => document.getElementById(id);
+const toast = (t) => { $('toast').textContent = t; $('toast').classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => $('toast').classList.remove('show'), 1600); };
+const buzz = (ms) => navigator.vibrate && navigator.vibrate(ms);
+
+const ctl = createController({
+  role: 'phone',
+  onStatus: (s) => { $('dServer').classList.toggle('on', s.server); $('dDisplay').classList.toggle('on', s.display); },
+  onFeedback: (m) => {
+    if (m.text) toast(m.text);
+    if (m.background) $('bgName').textContent = '배경 ' + m.background;
+  },
+});
+
+let zero = null;
+const speeds = [['느림', 0.5], ['보통', 1], ['빠름', 1.6]];
+let speedIdx = 1;
+let grip = false;
+let elbowDir = 0;               // -1 올리기, +1 내리기
+const out = { yaw: 0, shoulder: 0 };
+
+function calibrate() {
+  zero = { beta: ctl.raw.beta, gamma: ctl.raw.gamma };
+  toast('영점을 맞췄어요');
+}
+
+function setBar(bar, val, v) {
+  const w = Math.abs(v) * 50;
+  bar.style.left = v >= 0 ? '50%' : (50 - w) + '%';
+  bar.style.width = w + '%';
+  val.textContent = (v * 100).toFixed(0);
+}
+
+ctl.onSensor((r) => {
+  $('dSensor').classList.add('on');
+  if (!zero) return;
+  const db = r.beta - zero.beta;
+  const dg = r.gamma - zero.gamma;
+  out.yaw = axis(dg, 5, 32);          // 오른쪽으로 기울이면 오른쪽으로 회전
+  out.shoulder = -axis(db, 5, 32);    // 앞으로 숙이면 팔이 앞/아래로
+  $('phoneVis').style.transform = `perspective(300px) rotateX(${-db}deg) rotateY(${dg}deg)`;
+});
+
+// 30Hz 로 PC에 전송
+setInterval(() => {
+  if (!zero) return;
+  const s = speeds[speedIdx][1];
+  ctl.send({ type: 'ctrl', yaw: out.yaw, shoulder: out.shoulder, elbow: elbowDir, grip: grip ? 1 : 0, speed: s });
+  setBar($('bYaw'), $('vYaw'), out.yaw);
+  setBar($('bSh'), $('vSh'), out.shoulder);
+  setBar($('bEl'), $('vEl'), -elbowDir);
+}, 33);
+
+// 누르고 있는 동안만 동작하는 버튼 (여러 손가락 동시 터치 지원)
+function holdButton(el, onDown, onUp) {
+  const down = (e) => { e.preventDefault(); el.classList.add('active'); onDown(); };
+  const up = (e) => { e.preventDefault(); el.classList.remove('active'); onUp(); };
+  el.addEventListener('touchstart', down, { passive: false });
+  el.addEventListener('touchend', up, { passive: false });
+  el.addEventListener('touchcancel', up, { passive: false });
+  el.addEventListener('mousedown', down);
+  el.addEventListener('mouseup', up);
+  el.addEventListener('mouseleave', (e) => { if (el.classList.contains('active')) up(e); });
+}
+holdButton($('btnUp'), () => { elbowDir = -1; }, () => { if (elbowDir === -1) elbowDir = 0; });
+holdButton($('btnDown'), () => { elbowDir = 1; }, () => { if (elbowDir === 1) elbowDir = 0; });
+
+// 집게: 한 번 누르면 집기, 다시 누르면 놓기
+function toggleGrip(e) {
+  e.preventDefault();
+  grip = !grip;
+  $('btnGrip').classList.toggle('active', grip);
+  $('btnGrip').innerHTML = grip ? '🖐<br>놓기' : '✊<br>집기';
+  $('gripText').textContent = grip ? '닫힘' : '열림';
+  buzz(grip ? 30 : 15);
+}
+$('btnGrip').addEventListener('touchstart', toggleGrip, { passive: false });
+$('btnGrip').addEventListener('mousedown', toggleGrip);
+
+const event = (name) => { ctl.send({ type: 'event', name }); buzz(20); };
+$('btnPrev').onclick = () => event('bg_prev');
+$('btnNext').onclick = () => event('bg_next');
+$('btnCam').onclick = () => event('camera');
+$('btnRestart').onclick = () => event('restart');
+$('btnCal').onclick = calibrate;
+$('btnSpeed').onclick = () => {
+  speedIdx = (speedIdx + 1) % speeds.length;
+  $('btnSpeed').textContent = `속도: ${speeds[speedIdx][0]}`;
+};
+
+$('btnStart').onclick = async () => {
+  $('startErr').textContent = '';
+  try {
+    await ctl.start();
+    calibrate();
+    $('overlay').style.display = 'none';
+  } catch (e) {
+    $('startErr').textContent = e.message;
+  }
+};
+</script>
+</body>
+</html>

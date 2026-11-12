@@ -55,6 +55,10 @@
   .qr .desc { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
   .qr .code { background: #fff; border-radius: 8px; padding: 8px; width: 190px; height: 190px; margin: 0 auto; }
   .qr .code svg { width: 100%; height: 100%; display: block; }
+  .qr.guide { text-align: left; }
+  .qr.guide h3 { justify-content: flex-start; }
+  .qr.guide ul { margin: 10px 0 0; padding-left: 18px; font-size: 14px; line-height: 1.9; color: var(--muted); }
+  .qr.guide b { color: var(--text); }
   .qr .url { font-size: 12px; margin-top: 8px; word-break: break-all; color: var(--accent); user-select: all; }
   #connect .actions { margin-top: 16px; display: flex; gap: 10px; justify-content: center; }
   #connect .actions .btn { padding: 10px 22px; font-size: 15px; }
@@ -75,7 +79,7 @@
   }
 </style>
 <script type="importmap">
-  { "imports": { "three": "/vendor/three/build/three.module.js" } }
+  { "imports": { "three": "/vendor/three/build/three.module.js", "three/addons/": "/vendor/three/examples/jsm/" } }
 </script>
 </head>
 <body>
@@ -90,8 +94,7 @@
 <div id="score" class="panel">점수 <b id="scoreVal">0</b></div>
 
 <div id="status" class="panel">
-  <span class="pill"><i class="dot" id="dLeft"></i>왼쪽 폰 (팔)</span>
-  <span class="pill"><i class="dot" id="dRight"></i>오른쪽 폰 (집게)</span>
+  <span class="pill"><i class="dot" id="dPhone"></i>스마트폰 조종기</span>
   <button id="btnConnect">📱 연결 QR</button>
 </div>
 
@@ -115,20 +118,24 @@
 
 <div id="connect" class="panel">
   <h1>🦾 기울기 로봇팔 시뮬레이터</h1>
-  <p>PC와 스마트폰 2대를 <b>같은 Wi‑Fi</b>에 연결한 뒤, 각 폰으로 QR 코드를 찍어 접속하세요.<br>
+  <p>PC와 스마트폰을 <b>같은 Wi‑Fi</b>에 연결한 뒤, 폰으로 QR 코드를 찍어 접속하세요.<br>
      "연결이 비공개로 설정되어 있지 않습니다" 경고가 나오면 <b>[고급] → [계속/방문]</b>을 누르면 됩니다.</p>
   <div class="qrs">
     <div class="qr">
-      <h3><i class="dot" id="qLeft"></i>왼쪽 폰 · 로봇팔</h3>
-      <div class="desc">기울여서 베이스·어깨·팔꿈치 3축 조종</div>
-      <div class="code" id="qrLeft"></div>
-      <div class="url" id="urlLeft"></div>
+      <h3><i class="dot" id="qPhone"></i>스마트폰 조종기</h3>
+      <div class="desc">QR 코드를 찍어 접속하세요</div>
+      <div class="code" id="qrPhone"></div>
+      <div class="url" id="urlPhone"></div>
     </div>
-    <div class="qr">
-      <h3><i class="dot" id="qRight"></i>오른쪽 폰 · 집게/배경</h3>
-      <div class="desc">숙여서 집게 닫기 · 휙 기울여 배경 전환</div>
-      <div class="code" id="qrRight"></div>
-      <div class="url" id="urlRight"></div>
+    <div class="qr guide">
+      <h3>조작 방법</h3>
+      <ul>
+        <li><b>좌우로 기울이기</b> → 베이스 회전</li>
+        <li><b>앞뒤로 기울이기</b> → 어깨 (앞으로 숙이면 팔이 앞/아래로)</li>
+        <li><b>▲▼ 버튼 누르고 있기</b> → 팔꿈치</li>
+        <li><b>집기 버튼</b> → 한 번 누르면 집기, 다시 누르면 놓기</li>
+        <li><b>◀ ▶ 버튼</b> → 배경 전환 · <b>🎥</b> 시점 전환</li>
+      </ul>
     </div>
   </div>
   <div class="actions">
