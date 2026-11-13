@@ -316,6 +316,7 @@ const state = {
   themeIndex: 0,
   camMode: 0,
   clock: 0,
+  pendingTimer: 0,
 };
 const missionGroup = new THREE.Group();
 scene.add(missionGroup);
@@ -365,6 +366,7 @@ function inObstacle(p, o, pad = 0) {
 }
 
 function loadMission(level) {
+  clearTimeout(state.pendingTimer);
   if (state.held) { missionGroup.attach(state.held.mesh); state.held = null; }
   disposeGroup(missionGroup);
   const m = buildMission(level);
@@ -432,7 +434,7 @@ function loadMission(level) {
     else { geo = new THREE.SphereGeometry(0.19, 28, 20); hx = hy = hz = 0.19; }
     const om2 = mesh(geo, om);
     om2.position.set(o.pos[0], hy, o.pos[1]);
-    om2.rotation.y = Math.random() * Math.PI;
+    om2.rotation.y = (((level * 7 + state.objects.length * 13) % 10) / 10) * Math.PI;  // 매번 같은 방향 (재생 재현용)
     missionGroup.add(om2);
     state.objects.push({ id: o.id, label: o.label, color: o.color, mesh: om2, hx, hy, hz, held: false, resting: true, vy: 0, locked: false, supportId: null });
   }
@@ -597,6 +599,9 @@ function handleEvent(name) {
   else if (name === 'bg_prev') setTheme(state.themeIndex - 1);
   else if (name === 'camera') setCam(state.camMode + 1);
   else if (name === 'restart') restartMission();
+  else if (name === 'rec_toggle') recToggle();
+  else if (name === 'play_toggle') playToggle();
+  else if (name === 'loop_toggle') toggleLoop();
 }
 
 addEventListener('keydown', (e) => {
@@ -609,6 +614,9 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Backspace') restartMission();
   if (e.code === 'KeyN') nextMission(true);
   if (e.code === 'KeyH') $('help').classList.toggle('hidden');
+  if (e.code === 'KeyV') recToggle();
+  if (e.code === 'KeyP') playToggle();
+  if (e.code === 'KeyL') toggleLoop();
   if (e.code === 'Space') e.preventDefault();
 });
 addEventListener('keyup', (e) => input.keys.delete(e.code));
@@ -707,12 +715,16 @@ function startMission() {
 
 function restartMission() {
   if (state.phase === 'intro') return;
+  playStop(true);
+  recStop();
   loadMission(state.level);
   startMission();
 }
 
 function nextMission(skip = false) {
   if (state.phase === 'intro') return;
+  playStop(true);
+  recStop();
   state.level += 1;
   loadMission(state.level);
   startMission();
@@ -727,28 +739,37 @@ function completeTask(t, o) {
   burst(o.mesh.position.clone().add(new THREE.Vector3(0, o.hy, 0)), COLORS[o.color].hex);
   chord([660, 880]);
   feedback({ vibrate: 60, text: '✔ 성공!' });
-  state.score += 100;
+  if (rec.mode !== 'play') state.score += 100;
   renderTasks();
   if (state.tasks.every((x) => x.done)) missionSuccess();
 }
 
 function missionSuccess() {
   state.phase = 'success';
+  chord([523, 659, 784, 1046]);
+  if (rec.mode === 'play') {
+    // 재생 중 성공: 점수·단계 이동 없이 결과만 표시
+    showBanner('재생 성공!', '기록한 동작 그대로 미션을 완료했어요', 'success', 2400);
+    feedback({ vibrate: [100, 60, 100], text: '재생 성공!' });
+    return;
+  }
+  const wasRec = rec.mode === 'rec';
+  if (wasRec) recStop('success');
   const bonus = state.mission.time ? Math.round(state.timeLeft * 2) : 50;
   state.score += bonus;
-  chord([523, 659, 784, 1046]);
-  showBanner('미션 성공!', `시간 보너스 +${bonus} · 다음 단계로 이동합니다`, 'success', 2600);
+  showBanner('미션 성공!', `시간 보너스 +${bonus}${wasRec ? ' · 녹화 저장됨' : ''} · 다음 단계로 이동합니다`, 'success', 2600);
   feedback({ vibrate: [100, 60, 100], text: '미션 성공!' });
-  setTimeout(() => nextMission(), 2800);
+  state.pendingTimer = setTimeout(() => nextMission(), 2800);
 }
 
 function missionFail() {
   state.phase = 'fail';
   beep(220, 0.5, 'sawtooth', 0.1);
   if (state.held) releaseHeld();
+  if (rec.mode === 'rec') recStop('fail');
   showBanner('시간 초과!', '같은 단계를 다시 시작합니다', 'fail', 2600);
   feedback({ vibrate: 300, text: '시간 초과' });
-  setTimeout(() => restartMission(), 2800);
+  state.pendingTimer = setTimeout(() => restartMission(), 2800);
 }
 
 // 물건이 착지했을 때만 완료 판정 (움직이는 구역이 지나가며 자동 완료되는 것 방지)
@@ -804,6 +825,232 @@ function releaseHeld() {
   beep(440, 0.08, 'square', 0.05);
 }
 
+// ---------------- 녹화 / 재생 ----------------
+// 폰 입력이 아니라 "관절 각도 + 집게 상태"를 시간과 함께 기록합니다.
+// 재생할 때 같은 단계·같은 시작 상태(물건 배치, 움직이는 구역 시간)로 되돌린 뒤
+// 기록된 자세를 그대로 적용하므로 매번 똑같이 반복됩니다.
+const REC_KEY = 'robot-arm-recording-v1';
+const REC_MIN_STEP = 1 / 60;           // 최대 초당 60프레임 기록
+const rec = {
+  mode: 'idle',      // idle | rec | play
+  cur: null,         // 녹화 중인 기록
+  data: null,        // 마지막으로 완성된 기록
+  t: 0,              // 녹화/재생 경과 시간(초)
+  lastT: -1,
+  lastGrip: 0,
+  fi: 0,             // 재생 중인 프레임 위치
+  speed: 1,
+  loop: false,
+  endHold: 0,
+};
+const SPEEDS = [0.5, 1, 2];
+
+function validRecording(d) {
+  if (!d || typeof d !== 'object' || !Array.isArray(d.frames) || d.frames.length < 2) return null;
+  if (!(Number.isInteger(d.level) && d.level >= 1)) return null;
+  if (!d.frames.every((f) => Array.isArray(f) && f.length >= 5 && f.every(Number.isFinite))) return null;
+  return d;
+}
+const recDuration = (d) => d.frames[d.frames.length - 1][0];
+const fmtTime = (s) => `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
+try {
+  const saved = localStorage.getItem(REC_KEY);
+  if (saved) rec.data = validRecording(JSON.parse(saved));
+} catch { /* 저장소를 쓸 수 없는 환경 */ }
+
+// 집게 끝이 지나간 길 (녹화: 빨강, 재생: 하늘색)
+const TRAIL_MAX = 30000;
+const trailGeo = new THREE.BufferGeometry();
+trailGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(TRAIL_MAX * 3), 3));
+trailGeo.setDrawRange(0, 0);
+const trail = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({ color: 0x38d6ff, transparent: true, opacity: 0.9 }));
+trail.frustumCulled = false;
+scene.add(trail);
+let trailN = 0;
+const trailLast = new THREE.Vector3(1e9, 0, 0);
+function trailClear() { trailN = 0; trailGeo.setDrawRange(0, 0); trailLast.set(1e9, 0, 0); }
+function trailPush(p) {
+  if (trailN >= TRAIL_MAX || p.distanceToSquared(trailLast) < 0.0004) return;
+  trailGeo.attributes.position.setXYZ(trailN++, p.x, p.y, p.z);
+  trailGeo.attributes.position.needsUpdate = true;
+  trailGeo.setDrawRange(0, trailN);
+  trailLast.copy(p);
+}
+
+// 단계를 처음 상태로 되돌림 (녹화·재생 시작점을 똑같이 맞춤)
+function resetRun(level) {
+  $('connect').classList.add('hidden');
+  state.level = level;
+  loadMission(level);
+  startMission();
+  state.clock = 0;
+  state.grip = state.gripVis = 0;
+  input.keyLock = false;
+  vel.yaw = vel.shoulder = vel.elbow = 0;
+  trailClear();
+}
+
+function recSample(force = false) {
+  const g = Math.round(state.grip * 100) / 100;
+  if (!force && rec.t - rec.lastT < REC_MIN_STEP && g === rec.lastGrip) return;
+  rec.cur.frames.push([+rec.t.toFixed(3), +joint.yaw.toFixed(5), +joint.shoulder.toFixed(5), +joint.elbow.toFixed(5), g]);
+  rec.lastT = rec.t;
+  rec.lastGrip = g;
+}
+
+function recStart() {
+  if (rec.mode === 'play') playStop(true);
+  resetRun(state.level);
+  rec.cur = {
+    app: 'tilt-robot-arm-sim', version: 1, level: state.level, title: state.mission.title,
+    created: new Date().toISOString(), success: false, frames: [],
+  };
+  rec.mode = 'rec';
+  rec.t = 0; rec.lastT = -1; rec.lastGrip = 0;
+  recSample(true);
+  trail.material.color.setHex(0xff4d5e);
+  showBanner('● 녹화 시작', `STAGE ${state.level} · 지금부터 조종하는 동작을 기록합니다`, 'warn', 2000);
+  beep(990, 0.15);
+  feedback({ rec: 'rec', text: '● 녹화 시작', vibrate: 60 });
+  updateRecUI();
+}
+
+// reason: 'user' | 'success' | 'fail'
+function recStop(reason = 'user') {
+  if (rec.mode !== 'rec') return;
+  recSample(true);
+  rec.mode = 'idle';
+  const d = validRecording(rec.cur);
+  rec.cur = null;
+  if (!d || recDuration(d) < 0.5) {
+    showBanner('녹화 취소', '기록이 너무 짧아요', '', 1500);
+    feedback({ rec: 'idle' });
+    updateRecUI();
+    return;
+  }
+  d.success = reason === 'success';
+  rec.data = d;
+  try { localStorage.setItem(REC_KEY, JSON.stringify(d)); } catch { /* 용량 부족 등 */ }
+  if (reason === 'user') showBanner('■ 녹화 완료', `${fmtTime(recDuration(d))} 기록 · ▶ 재생으로 똑같이 반복할 수 있어요`, '', 2400);
+  feedback({ rec: 'idle', text: '녹화 저장됨' });
+  updateRecUI();
+}
+
+function playStart() {
+  const d = rec.data;
+  if (!d) { showBanner('기록 없음', '먼저 ● 녹화로 동작을 기록해 주세요', 'warn', 1800); return; }
+  if (rec.mode === 'rec') recStop();
+  resetRun(d.level);
+  rec.mode = 'play';
+  rec.t = 0; rec.fi = 0; rec.endHold = 0;
+  const p = playbackPose(d, 0);
+  Object.assign(joint, { yaw: p.yaw, shoulder: p.shoulder, elbow: p.elbow });
+  applyJoints(joint);
+  trail.material.color.setHex(0x38d6ff);
+  showBanner('▶ 재생', `STAGE ${d.level} · ${fmtTime(recDuration(d))} 기록 · ${rec.speed}배속${rec.loop ? ' · 반복' : ''}`, '', 1800);
+  feedback({ rec: 'play', text: '▶ 재생 중 (조종 잠김)' });
+  updateRecUI();
+}
+
+function playStop(silent = false) {
+  if (rec.mode !== 'play') return;
+  rec.mode = 'idle';
+  if (!silent) showBanner('■ 재생 정지', '이제 다시 직접 조종할 수 있어요', '', 1500);
+  feedback({ rec: 'idle' });
+  updateRecUI();
+}
+
+function playbackPose(d, t) {
+  const f = d.frames;
+  while (rec.fi < f.length - 2 && f[rec.fi + 1][0] <= t) rec.fi++;
+  const a = f[rec.fi];
+  const b = f[Math.min(rec.fi + 1, f.length - 1)];
+  const span = b[0] - a[0];
+  const u = span > 0 ? Math.min(1, Math.max(0, (t - a[0]) / span)) : 1;
+  return {
+    yaw: a[1] + (b[1] - a[1]) * u,
+    shoulder: a[2] + (b[2] - a[2]) * u,
+    elbow: a[3] + (b[3] - a[3]) * u,
+    grip: u >= 1 ? b[4] : a[4],
+  };
+}
+
+const recToggle = () => (rec.mode === 'rec' ? recStop() : recStart());
+const playToggle = () => (rec.mode === 'play' ? playStop() : playStart());
+function setSpeed() {
+  rec.speed = SPEEDS[(SPEEDS.indexOf(rec.speed) + 1) % SPEEDS.length];
+  updateRecUI();
+}
+function toggleLoop() {
+  rec.loop = !rec.loop;
+  feedback({ loop: rec.loop, text: rec.loop ? '🔁 반복 재생 켬' : '반복 재생 끔' });
+  updateRecUI();
+}
+
+function recDownload() {
+  if (!rec.data) { showBanner('기록 없음', '저장할 기록이 없어요', 'warn', 1500); return; }
+  const d = rec.data;
+  const stamp = d.created.slice(0, 16).replace(/[-:T]/g, '');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(d)], { type: 'application/json' }));
+  a.download = `로봇팔기록_STAGE${d.level}_${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
+function recLoadFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    let d = null;
+    try { d = validRecording(JSON.parse(reader.result)); } catch { d = null; }
+    if (!d) { showBanner('불러오기 실패', '로봇팔 기록 파일(.json)이 아니에요', 'fail', 2000); return; }
+    if (rec.mode !== 'idle') { playStop(true); recStop(); }
+    rec.data = d;
+    try { localStorage.setItem(REC_KEY, JSON.stringify(d)); } catch { /* 무시 */ }
+    showBanner('📂 기록 불러옴', `STAGE ${d.level} · ${fmtTime(recDuration(d))} · ▶ 재생을 눌러 보세요`, '', 2200);
+    updateRecUI();
+  };
+  reader.readAsText(file);
+}
+
+function updateRecUI() {
+  const d = rec.data;
+  $('btnRec').textContent = rec.mode === 'rec' ? '■ 녹화 정지' : '● 녹화';
+  $('btnRec').classList.toggle('on', rec.mode === 'rec');
+  $('btnPlay').textContent = rec.mode === 'play' ? '■ 재생 정지' : '▶ 재생';
+  $('btnPlay').classList.toggle('on', rec.mode === 'play');
+  $('btnPlay').disabled = !d && rec.mode !== 'play';
+  $('btnSave').disabled = !d;
+  $('btnSpeed').textContent = `${rec.speed}배속`;
+  $('btnLoop').classList.toggle('on', rec.loop);
+  $('recPanel').dataset.mode = rec.mode;
+  updateRecStatus();
+}
+
+function updateRecStatus() {
+  const d = rec.data;
+  let text, pct = 0;
+  if (rec.mode === 'rec') text = `● 녹화 중 ${fmtTime(rec.t)} · STAGE ${state.level}`;
+  else if (rec.mode === 'play') {
+    const dur = recDuration(d);
+    pct = Math.min(1, rec.t / dur);
+    text = `▶ 재생 중 ${fmtTime(Math.min(rec.t, dur))} / ${fmtTime(dur)}`;
+  } else if (d) text = `저장된 기록: STAGE ${d.level} · ${fmtTime(recDuration(d))}${d.success ? ' · ✔ 성공 기록' : ''}`;
+  else text = '기록 없음 · ● 녹화를 눌러 동작을 기록하세요';
+  $('recText').textContent = text;
+  $('recBar').style.width = (pct * 100).toFixed(1) + '%';
+}
+
+$('btnRec').onclick = (e) => { recToggle(); e.currentTarget.blur(); };
+$('btnPlay').onclick = (e) => { playToggle(); e.currentTarget.blur(); };
+$('btnSpeed').onclick = (e) => { setSpeed(); e.currentTarget.blur(); };
+$('btnLoop').onclick = (e) => { toggleLoop(); e.currentTarget.blur(); };
+$('btnSave').onclick = (e) => { recDownload(); e.currentTarget.blur(); };
+$('btnLoad').onclick = (e) => { $('fileLoad').click(); e.currentTarget.blur(); };
+$('fileLoad').onchange = (e) => { if (e.target.files[0]) recLoadFile(e.target.files[0]); e.target.value = ''; };
+
 // ---------------- 메인 루프 ----------------
 const RATE = { yaw: 75 * DEG, shoulder: 48 * DEG, elbow: 65 * DEG };
 const vel = { yaw: 0, shoulder: 0, elbow: 0 };
@@ -815,8 +1062,9 @@ function frame(now) {
 }
 
 function tick(now) {
-  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
+  let dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
   last = Math.max(last, now);
+  if (rec.mode === 'play') dt *= rec.speed;   // 재생 속도에 맞춰 시간 전체를 빠르게/느리게
   state.clock += dt;
 
   // 입력 합치기 (폰 신호가 0.5초 이상 끊기면 정지)
@@ -836,19 +1084,28 @@ function tick(now) {
 
   // 관절을 하나씩 움직여 보고, 부딪히면 그 관절만 되돌림 (벽을 따라 미끄러지듯)
   // 이미 끼어 있는 자세라면 빠져나올 수 있도록 검사를 건너뜀
-  const moving = ['yaw', 'shoulder', 'elbow'].some((j) => Math.abs(vel[j]) > 1e-4);
-  const stuck = moving && poseInvalid();
-  for (const j of ['yaw', 'shoulder', 'elbow']) {
-    if (Math.abs(vel[j]) < 1e-4) continue;
-    const prev = joint[j];
-    joint[j] = Math.max(LIMITS[j][0], Math.min(LIMITS[j][1], prev + vel[j] * RATE[j] * dt));
+  if (rec.mode === 'play') {
+    // 재생: 기록된 관절 각도와 집게 상태를 그대로 적용 (조종 입력은 무시)
+    rec.t += dt;
+    const pose = playbackPose(rec.data, rec.t);
+    joint.yaw = pose.yaw; joint.shoulder = pose.shoulder; joint.elbow = pose.elbow;
     applyJoints(joint);
-    if (!stuck && poseInvalid()) { joint[j] = prev; vel[j] = 0; applyJoints(joint); }
+    state.grip = pose.grip;
+    vel.yaw = vel.shoulder = vel.elbow = 0;
+  } else {
+    const moving = ['yaw', 'shoulder', 'elbow'].some((j) => Math.abs(vel[j]) > 1e-4);
+    const stuck = moving && poseInvalid();
+    for (const j of ['yaw', 'shoulder', 'elbow']) {
+      if (Math.abs(vel[j]) < 1e-4) continue;
+      const prev = joint[j];
+      joint[j] = Math.max(LIMITS[j][0], Math.min(LIMITS[j][1], prev + vel[j] * RATE[j] * dt));
+      applyJoints(joint);
+      if (!stuck && poseInvalid()) { joint[j] = prev; vel[j] = 0; applyJoints(joint); }
+    }
+    state.grip = playing ? Math.max(L.grip, k.has('Space') ? 1 : 0, input.keyLock ? 1 : 0) : 0;
   }
 
   // 집게
-  const R = L.grip;
-  state.grip = playing ? Math.max(R, k.has('Space') ? 1 : 0, input.keyLock ? 1 : 0) : 0;
   state.gripVis += (state.grip - state.gripVis) * (1 - Math.exp(-dt * 14));
   if (!state.held && state.grip > 0.55) tryGrab();
   if (state.held && state.grip < 0.35) releaseHeld();
@@ -856,6 +1113,23 @@ function tick(now) {
   if (state.held) gap = Math.max(gap, Math.min(state.held.hx, state.held.hz) * 2 + 0.06);
   fingerL.position.z = gap / 2 + 0.03;
   fingerR.position.z = -gap / 2 - 0.03;
+
+  // 녹화 / 재생 진행
+  if (rec.mode === 'rec' && state.phase === 'play') {
+    rec.t += dt;
+    recSample();
+    trailPush(tipPoint.getWorldPosition(new THREE.Vector3()));
+  } else if (rec.mode === 'play') {
+    trailPush(tipPoint.getWorldPosition(new THREE.Vector3()));
+    if (rec.t >= recDuration(rec.data)) {
+      rec.endHold += dt;            // 마지막 물건이 떨어져 판정될 시간을 잠깐 줌
+      if (rec.endHold > 1.2) {
+        if (rec.loop) playStart();
+        else { playStop(true); showBanner('재생 끝', '▶ 재생으로 다시 보거나, 직접 조종할 수 있어요', '', 2000); }
+      }
+    }
+  }
+  if (rec.mode !== 'idle') updateRecStatus();
 
   // 물건 낙하 / 착지
   for (const o of state.objects) {
@@ -900,7 +1174,7 @@ function tick(now) {
   guideDot.position.set(gp.x, sup.y + 0.02, gp.z);
 
   // 시간
-  if (state.phase === 'play' && state.mission.time) {
+  if (state.phase === 'play' && state.mission.time && rec.mode !== 'play') {
     state.timeLeft -= dt;
     if (state.timeLeft <= 0) { state.timeLeft = 0; missionFail(); }
     updateTimer();
@@ -960,7 +1234,8 @@ setTheme(0);
 setCam(0);
 applyJoints(joint);
 loadMission(state.level);
+updateRecUI();
 requestAnimationFrame(frame);
 
 // 디버그용 (브라우저 콘솔에서 상태 확인)
-window.__sim = { state, joint, input, tipPoint, grabPoint, tick, camera };
+window.__sim = { state, joint, input, tipPoint, grabPoint, tick, camera, rec };

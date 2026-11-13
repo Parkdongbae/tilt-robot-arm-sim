@@ -15,6 +15,10 @@
   .grip-state { text-align: center; font-size: 13px; color: var(--muted); margin-top: 4px; }
   .grip-state b { color: var(--warn); }
   .small button { padding: 11px 6px; font-size: 14px; }
+  .tilt-vis .phone { width: 46px; height: 78px; border-radius: 10px; }
+  #btnRec.active { background: var(--bad); color: #fff; }
+  #btnPlay.active, #btnLoop.active { background: var(--accent); color: #001; }
+  body.playing .pad button, body.playing #btnCal, body.playing #btnSpeed { opacity: .4; }
 </style>
 </head>
 <body>
@@ -38,10 +42,16 @@
 <p class="help">
   화면이 위로 오게 눕혀 두 손으로 잡으세요.
   <b>좌우 기울기</b> → 베이스 회전 · <b>앞뒤 기울기</b> → 어깨 ·
-  <b>왼쪽 버튼</b> → 팔꿈치 · <b>오른쪽 버튼</b> → 집기/놓기
+  <b>왼쪽 버튼</b> → 팔꿈치 · <b>오른쪽 버튼</b> → 집기/놓기 ·
+  <b>● 녹화</b>한 동작은 <b>▶ 재생</b>으로 똑같이 반복돼요
 </p>
 
 <div class="grow">
+  <div class="row3 small">
+    <button id="btnRec">● 녹화</button>
+    <button id="btnPlay">▶ 재생</button>
+    <button id="btnLoop">🔁 반복</button>
+  </div>
   <div class="row3 small">
     <button id="btnPrev">◀ 배경</button>
     <button id="btnCam">🎥 시점</button>
@@ -82,6 +92,8 @@ const ctl = createController({
   onFeedback: (m) => {
     if (m.text) toast(m.text);
     if (m.background) $('bgName').textContent = '배경 ' + m.background;
+    if (m.rec) setRecMode(m.rec);
+    if (typeof m.loop === 'boolean') $('btnLoop').classList.toggle('active', m.loop);
   },
 });
 
@@ -151,6 +163,18 @@ $('btnGrip').addEventListener('touchstart', toggleGrip, { passive: false });
 $('btnGrip').addEventListener('mousedown', toggleGrip);
 
 const event = (name) => { ctl.send({ type: 'event', name }); buzz(20); };
+
+// 녹화·재생 상태 표시 (PC에서 알려 줌)
+function setRecMode(mode) {
+  $('btnRec').classList.toggle('active', mode === 'rec');
+  $('btnRec').textContent = mode === 'rec' ? '■ 녹화 끝' : '● 녹화';
+  $('btnPlay').classList.toggle('active', mode === 'play');
+  $('btnPlay').textContent = mode === 'play' ? '■ 재생 끝' : '▶ 재생';
+  document.body.classList.toggle('playing', mode === 'play');
+}
+$('btnRec').onclick = () => event('rec_toggle');
+$('btnPlay').onclick = () => event('play_toggle');
+$('btnLoop').onclick = () => event('loop_toggle');
 $('btnPrev').onclick = () => event('bg_prev');
 $('btnNext').onclick = () => event('bg_next');
 $('btnCam').onclick = () => event('camera');

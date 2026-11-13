@@ -44,7 +44,22 @@
   #joints b { color: var(--text); font-weight: 600; }
   #help { right: 16px; bottom: 16px; font-size: 12px; color: var(--muted); line-height: 1.6; max-width: 330px; }
   #help b { color: var(--text); }
-  #theme { left: 50%; bottom: 16px; transform: translateX(-50%); font-size: 13px; padding: 6px 14px; border-radius: 99px; }
+  #recPanel { left: 50%; bottom: 16px; transform: translateX(-50%); display: grid; gap: 8px; padding: 10px 12px; width: min(600px, calc(100vw - 32px)); }
+  #recPanel .rec-top { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #recPanel .rec-dot { width: 10px; height: 10px; border-radius: 50%; background: rgba(255,255,255,.25); flex: none; }
+  #recPanel[data-mode="rec"] .rec-dot { background: var(--bad); box-shadow: 0 0 10px var(--bad); animation: blink 1s infinite; }
+  #recPanel[data-mode="play"] .rec-dot { background: #38d6ff; box-shadow: 0 0 10px #38d6ff; }
+  #recPanel[data-mode="rec"] { border-color: rgba(255,93,108,.6); }
+  #recPanel[data-mode="play"] { border-color: rgba(56,214,255,.6); }
+  #recPanel .rec-track { height: 4px; background: rgba(255,255,255,.1); border-radius: 99px; overflow: hidden; }
+  #recBar { height: 100%; width: 0; background: #38d6ff; }
+  #recPanel .rec-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+  #recPanel .btn { padding: 6px 12px; font-size: 13px; border-radius: 8px; }
+  #recPanel .btn:disabled { opacity: .35; cursor: default; }
+  #btnRec.on { background: var(--bad); color: #fff; border-color: transparent; }
+  #btnPlay.on, #btnLoop.on { background: #38d6ff; color: #001; border-color: transparent; }
+  @keyframes blink { 50% { opacity: .3; } }
+  @media (prefers-reduced-motion: reduce) { #recPanel[data-mode="rec"] .rec-dot { animation: none; } }
   #score { top: 16px; left: 50%; transform: translateX(-50%); font-size: 15px; padding: 8px 18px; border-radius: 99px; }
   #connect { top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(760px, calc(100vw - 32px)); padding: 22px 24px; text-align: center; }
   #connect h1 { margin: 0 0 6px; font-size: 24px; }
@@ -74,9 +89,10 @@
   #banner.warn .big { color: var(--warn); }
   .hidden { display: none !important; }
   @media (max-width: 1100px) {
-    #score { top: auto; bottom: 64px; }
+    #score { top: auto; bottom: 120px; }
     #help { display: none; }
   }
+  @media (max-width: 960px) { #joints { display: none; } }
 </style>
 <script type="importmap">
   { "imports": { "three": "/vendor/three/build/three.module.js", "three/addons/": "/vendor/three/examples/jsm/" } }
@@ -95,6 +111,7 @@
 
 <div id="status" class="panel">
   <span class="pill"><i class="dot" id="dPhone"></i>스마트폰 조종기</span>
+  <span class="pill" id="theme">배경: -</span>
   <button id="btnConnect">📱 연결 QR</button>
 </div>
 
@@ -106,13 +123,26 @@
   <div>시점 <b id="jCam">기본</b></div>
 </div>
 
-<div id="theme" class="panel">배경: -</div>
+<div id="recPanel" class="panel" data-mode="idle">
+  <div class="rec-top"><i class="rec-dot"></i><span id="recText">기록 없음</span></div>
+  <div class="rec-track"><div id="recBar"></div></div>
+  <div class="rec-btns">
+    <button class="btn" id="btnRec" title="단축키 V">● 녹화</button>
+    <button class="btn" id="btnPlay" title="단축키 P">▶ 재생</button>
+    <button class="btn" id="btnSpeed" title="재생 속도">1배속</button>
+    <button class="btn" id="btnLoop" title="단축키 L">🔁 반복</button>
+    <button class="btn" id="btnSave">💾 파일로 저장</button>
+    <button class="btn" id="btnLoad">📂 불러오기</button>
+    <input type="file" id="fileLoad" accept=".json,application/json" hidden>
+  </div>
+</div>
 
 <div id="help" class="panel">
   <b>키보드로도 테스트할 수 있어요</b><br>
   A/D 베이스 · W/S 어깨 · R/F 팔꿈치<br>
   Space 누르기 집게 닫기 · G 집게 잠금<br>
   Q/E 배경 전환 · C 시점 · Backspace 다시하기<br>
+  V 녹화 · P 재생 · L 반복 재생<br>
   N 다음 단계로 건너뛰기 · H 이 도움말 숨기기
 </div>
 
