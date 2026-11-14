@@ -72,6 +72,9 @@ function makeHandler(ips) {
         ips,
         phone: `${base}/phone.html`,
         phoneQR: await QRCode.toString(`${base}/phone.html`, { type: 'svg', margin: 1 }),
+        // 자동차 게임 조종기
+        carPhone: `${base}/car-phone.html`,
+        carPhoneQR: await QRCode.toString(`${base}/car-phone.html`, { type: 'svg', margin: 1 }),
       };
       res.writeHead(200, { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' });
       return res.end(JSON.stringify(info));
@@ -83,7 +86,7 @@ function makeHandler(ips) {
       file = path.join(__dirname, 'node_modules', 'three', p.slice('/vendor/three/'.length));
       if (!file.startsWith(path.join(__dirname, 'node_modules', 'three'))) file = null;
     } else {
-      if (p === '/') p = '/index.html';
+      if (p === '/') p = '/home.html';   // 첫 화면: 게임 선택 (로봇팔은 /index.html)
       file = path.join(PUBLIC_DIR, p);
       if (!file.startsWith(PUBLIC_DIR)) file = null;
     }
@@ -163,8 +166,11 @@ function attachWS(server) {
       const ip = ips[0] || '<PC의 IP>';
       console.log('');
       console.log('=== 기울기 로봇팔 시뮬레이터 ===');
-      console.log(`PC 시뮬레이터 화면 : http://localhost:${HTTP_PORT}`);
+      console.log(`첫 화면 (게임 선택)  : http://localhost:${HTTP_PORT}`);
+      console.log(`로봇팔 시뮬레이터   : http://localhost:${HTTP_PORT}/index.html`);
       console.log(`스마트폰 조종기     : https://${ip}:${HTTPS_PORT}/phone.html`);
+      console.log(`자동차 게임 화면    : http://localhost:${HTTP_PORT}/car.html`);
+      console.log(`자동차 핸들 조종기  : https://${ip}:${HTTPS_PORT}/car-phone.html`);
       if (ips.length > 1) console.log(`(다른 IP 후보: ${ips.slice(1).join(', ')})`);
       console.log('폰과 PC는 같은 Wi-Fi 에 연결되어 있어야 합니다.');
       console.log('폰에서 "안전하지 않음" 경고가 뜨면 [고급] → [계속/방문] 을 누르세요.');

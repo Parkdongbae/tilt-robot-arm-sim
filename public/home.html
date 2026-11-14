@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b0f18">
+<title>기울기 게임 — 선택</title>
+<style>
+  :root { --bg: #0b0f18; --card: #141b2b; --line: #263149; --text: #eef2f8; --muted: #93a0b5; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body { background: radial-gradient(1200px 700px at 50% -10%, #1b2a4a 0%, var(--bg) 60%); color: var(--text);
+    font-family: "Segoe UI", "Malgun Gothic", system-ui, sans-serif; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 32px 20px; min-height: 100vh; }
+  h1 { margin: 0; font-size: clamp(26px, 4vw, 40px); letter-spacing: -.5px; text-align: center; }
+  .lead { margin: 10px 0 34px; color: var(--muted); font-size: 16px; text-align: center; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 24px; width: min(940px, 100%); }
+  a.card { display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: 22px;
+    overflow: hidden; color: inherit; text-decoration: none; transition: transform .18s, border-color .18s, box-shadow .18s; }
+  a.card:hover, a.card:focus-visible { transform: translateY(-6px); border-color: var(--c); box-shadow: 0 18px 50px -18px var(--c); outline: none; }
+  .art { aspect-ratio: 16 / 9; display: block; width: 100%; }
+  .body { padding: 20px 22px 22px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .body h2 { margin: 0; font-size: 23px; }
+  .body p { margin: 0; color: var(--muted); font-size: 14.5px; line-height: 1.55; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .tags span { font-size: 12px; padding: 3px 10px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+  .go { margin-top: auto; padding-top: 14px; font-weight: 700; color: var(--c); font-size: 16px; }
+  footer { margin-top: 30px; color: var(--muted); font-size: 13px; text-align: center; line-height: 1.6; }
+  kbd { border: 1px solid var(--line); border-radius: 6px; padding: 1px 7px; font: inherit; color: var(--text); }
+</style>
+</head>
+<body>
+<h1>📱 스마트폰 기울기 게임</h1>
+<p class="lead">폰을 기울여 PC 화면 속 3D 세상을 조종해 보세요. 무엇을 할까요?</p>
+
+<div class="grid">
+  <a class="card" href="/index.html" style="--c:#4cc9f0" id="cardArm">
+    <svg class="art" viewBox="0 0 320 180" role="img" aria-label="로봇팔">
+      <defs>
+        <linearGradient id="a1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#16324a"/><stop offset="1" stop-color="#0d1624"/></linearGradient>
+        <linearGradient id="a2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e8edf3"/><stop offset="1" stop-color="#8d99aa"/></linearGradient>
+      </defs>
+      <rect width="320" height="180" fill="url(#a1)"/>
+      <ellipse cx="160" cy="158" rx="120" ry="12" fill="#0a111c"/>
+      <rect x="128" y="138" width="64" height="18" rx="6" fill="#3a4558"/>
+      <rect x="143" y="122" width="34" height="20" rx="5" fill="url(#a2)"/>
+      <g stroke-linecap="round" fill="none">
+        <path d="M160 124 L128 70" stroke="url(#a2)" stroke-width="17"/>
+        <path d="M128 70 L206 50" stroke="url(#a2)" stroke-width="13"/>
+        <path d="M206 50 L224 78" stroke="#59657a" stroke-width="8"/>
+        <path d="M224 78 L214 96 M224 78 L238 94" stroke="#2b3444" stroke-width="6"/>
+      </g>
+      <circle cx="160" cy="124" r="11" fill="#2b3444"/><circle cx="160" cy="124" r="4.5" fill="#4cc9f0"/>
+      <circle cx="128" cy="70" r="10" fill="#2b3444"/><circle cx="128" cy="70" r="4" fill="#4cc9f0"/>
+      <circle cx="206" cy="50" r="8" fill="#2b3444"/><circle cx="206" cy="50" r="3.2" fill="#4cc9f0"/>
+      <rect x="213" y="100" width="26" height="26" rx="4" fill="#ffb703"/>
+      <rect x="258" y="134" width="40" height="22" rx="4" fill="none" stroke="#06d6a0" stroke-width="2.5" stroke-dasharray="6 5"/>
+    </svg>
+    <div class="body">
+      <h2>🦾 로봇팔 시뮬레이터</h2>
+      <p>폰을 눕혀서 기울이면 3축 로봇팔이 움직입니다. 물건을 집어 목표 구역으로 옮기는 미션을 단계별로 풀어 보세요.</p>
+      <div class="tags"><span>폰 눕혀 잡기</span><span>미션 단계</span><span>녹화·재생</span></div>
+      <div class="go">시작하기 →</div>
+    </div>
+  </a>
+
+  <a class="card" href="/car.html" style="--c:#ef476f" id="cardCar">
+    <svg class="art" viewBox="0 0 320 180" role="img" aria-label="자동차 레이싱">
+      <defs>
+        <linearGradient id="c1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5fa8e6"/><stop offset=".62" stop-color="#cfe3f2"/></linearGradient>
+        <linearGradient id="c2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e2233b"/><stop offset="1" stop-color="#8f0a18"/></linearGradient>
+      </defs>
+      <rect width="320" height="180" fill="url(#c1)"/>
+      <path d="M0 104 L50 70 L92 98 L140 60 L196 100 L246 72 L320 104 V112 H0Z" fill="#7f9bb0"/>
+      <rect y="104" width="320" height="76" fill="#5a9c46"/>
+      <path d="M118 104 H202 L330 180 H-10Z" fill="#3c3f45"/>
+      <path d="M159 108 h2 l2 14 h-6z M156 132 h8 l3 20 h-14z" fill="#e9e9e4"/>
+      <path d="M118 104 L-10 180 H12 L124 104Z M202 104 L330 180 H308 L196 104Z" fill="#c81e2e" opacity=".9"/>
+      <g transform="translate(160 136)">
+        <ellipse cx="0" cy="26" rx="52" ry="7" fill="#000" opacity=".35"/>
+        <rect x="-40" y="-2" width="80" height="26" rx="9" fill="url(#c2)"/>
+        <path d="M-27 -2 Q-22 -22 0 -22 Q22 -22 27 -2Z" fill="#0b1118"/>
+        <rect x="-44" y="-17" width="88" height="5" rx="2" fill="#0e1014"/>
+        <rect x="-33" y="6" width="66" height="5" rx="2.5" fill="#ff3b4a"/>
+        <rect x="-41" y="16" width="14" height="12" rx="3" fill="#0c0c0d"/><rect x="27" y="16" width="14" height="12" rx="3" fill="#0c0c0d"/>
+      </g>
+    </svg>
+    <div class="body">
+      <h2>🏎 기울기 핸들 레이싱</h2>
+      <p>폰을 가로로 잡고 핸들처럼 돌려 서킷을 달립니다. 화면의 악셀·브레이크 페달과 자동/수동 변속으로 랩타임에 도전하세요.</p>
+      <div class="tags"><span>폰 가로로 잡기</span><span>자동·수동 변속</span><span>3바퀴 랩타임</span></div>
+      <div class="go">시작하기 →</div>
+    </div>
+  </a>
+</div>
+
+<footer>
+  PC와 스마트폰을 <b>같은 Wi‑Fi</b>에 연결한 뒤, 게임 화면의 QR 코드를 폰으로 찍으면 연결됩니다.<br>
+  키보드 <kbd>1</kbd> 로봇팔 · <kbd>2</kbd> 자동차
+</footer>
+
+<script>
+  addEventListener('keydown', (e) => {
+    if (e.key === '1') location.href = '/index.html';
+    if (e.key === '2') location.href = '/car.html';
+  });
+</script>
+</body>
+</html>
