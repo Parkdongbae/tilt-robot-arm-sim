@@ -1,7 +1,11 @@
 // 기울기 핸들 레이싱 — PC 게임 화면
 // 트랙 생성, 차량 물리, 변속기(자동/수동), 레이스 진행, HUD
 import * as THREE from 'three';
-import { Sky } from 'three/addons/objects/Sky.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
@@ -32,7 +36,7 @@ const TRACK_LEN = curve.getLength();
 // 화면 기본 설정 (하늘·환경광·톤매핑)
 // ====================================================================
 const renderer = new THREE.WebGLRenderer({ canvas: $('view'), antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -41,46 +45,104 @@ renderer.toneMappingExposure = 0.42;
 const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
 
 const scene = new THREE.Scene();
-const HAZE = 0xa9c4de;
-scene.fog = new THREE.Fog(HAZE, 260, 1700);
-
 const camera = new THREE.PerspectiveCamera(62, 1, 0.3, 4000);
+
+// ---- 후처리: 장면 → 빛 번짐(Bloom) → 톤매핑·색공간 ----
+// 장면은 HDR(HalfFloat)로 그리고 4x MSAA 로 계단 현상을 줄인다.
+// Bloom 임계값이 높아서 신호등·브레이크등·해처럼 아주 밝은 것만 번진다.
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.45, 0.3, 2.6);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
 function resize() {
   renderer.setSize(innerWidth, innerHeight, false);
+  composer.setPixelRatio(renderer.getPixelRatio());
+  composer.setSize(innerWidth, innerHeight);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 }
 addEventListener('resize', resize);
 resize();
 
-// 태양 방향 (하늘·그림자·반사가 모두 이 방향을 씀)
-const SUN_DIR = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 34), THREE.MathUtils.degToRad(215));
+// 태양 방향 (하늘·그림자·반사가 모두 이 방향을 씀) — 맑은 오후
+const SUN_DIR = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - 30), THREE.MathUtils.degToRad(215));
 
-// 물리 기반 하늘 + 하늘을 반사/환경광으로 사용
-const sky = new Sky();
-sky.scale.setScalar(450000);
+// ---- 하늘: 위는 짙은 파랑 → 아래로 옅은 하늘색 → 지평선은 노을빛 ----
+// 노출(0.42)에 맞춰 하늘 밝기를 SKY_BRIGHT 배로 올려 둔다.
+const SKY_BRIGHT = 2.4;
+const SKY_TOP = new THREE.Color(0x1f5fc4), SKY_MID = new THREE.Color(0x6aa8ea);
+const SKY_HZN = new THREE.Color(0xf3d2b4), SKY_GLOW = new THREE.Color(0xffa565);
+function skyMaterial(disk) {
+  return new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: {
+      top: { value: SKY_TOP }, mid: { value: SKY_MID }, hzn: { value: SKY_HZN }, glow: { value: SKY_GLOW },
+      sunDir: { value: SUN_DIR }, bright: { value: SKY_BRIGHT }, disk: { value: disk },
+    },
+    vertexShader: /* glsl */`
+      varying vec3 vDir;
+      void main() {
+        vDir = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: /* glsl */`
+      uniform vec3 top, mid, hzn, glow, sunDir;
+      uniform float bright, disk;
+      varying vec3 vDir;
+      void main() {
+        vec3 d = normalize(vDir);
+        float h = d.y;
+        float s = max(dot(d, sunDir), 0.0);
+        float az = 0.5 + 0.5 * dot(normalize(d.xz + 1e-5), normalize(sunDir.xz));   // 해 쪽일수록 1
+        vec3 col = mix(hzn, mid, smoothstep(-0.02, 0.24, h));
+        col = mix(col, top, smoothstep(0.2, 0.9, h));
+        // 지평선 띠: 해가 있는 쪽은 주황빛 노을, 반대쪽은 연한 분홍빛
+        float band = 1.0 - smoothstep(0.0, 0.16, abs(h));
+        col = mix(col, glow, band * (0.25 + 0.6 * az * az));
+        col += glow * pow(s, 18.0) * 0.45;                                       // 해 주변 빛무리
+        col += vec3(1.0, 0.95, 0.85) * smoothstep(0.99935, 0.9997, s) * disk;     // 해
+        col = mix(col, hzn * 0.85, smoothstep(0.0, -0.12, h));                   // 지평선 아래
+        gl_FragColor = vec4(col * bright, 1.0);
+      }`,
+  });
+}
+const skyDome = new THREE.Mesh(new THREE.SphereGeometry(3000, 48, 24), skyMaterial(40));
+skyDome.renderOrder = -1000;
+skyDome.frustumCulled = false;
+scene.add(skyDome);
+
+// 지평선 색과 같은 지수 안개 → 먼 산과 나무가 하늘에 자연스럽게 녹아든다
+const HAZE = SKY_HZN.clone().lerp(SKY_MID, 0.55).multiplyScalar(SKY_BRIGHT * 0.92);
+scene.fog = new THREE.FogExp2(HAZE, 0.00095);
+
+// ---- 환경 반사맵: RoomEnvironment 의 스튜디오 조명판 + 실제 하늘 + 도로 ----
+// 방 벽은 빼고 조명판만 남겨, 차체에 또렷한 하이라이트가 생기면서도 하늘과 도로가 비친다.
 {
-  const u = sky.material.uniforms;
-  u.turbidity.value = 2;
-  u.rayleigh.value = 2.4;
-  u.mieCoefficient.value = 0.004;
-  u.mieDirectionalG.value = 0.82;
-  u.sunPosition.value.copy(SUN_DIR);
   const pmrem = new THREE.PMREMGenerator(renderer);
-  const envScene = new THREE.Scene();
-  envScene.add(sky);
-  scene.environment = pmrem.fromScene(envScene).texture;
-  scene.add(sky);
+  const env = new RoomEnvironment(renderer);
+  for (const o of [...env.children]) {
+    if (o.isMesh && o.material.isMeshBasicMaterial) o.material.color.multiplyScalar(0.09);  // 조명판
+    else env.remove(o);                                                                    // 방 벽·상자·점광원
+  }
+  env.add(new THREE.Mesh(new THREE.SphereGeometry(90, 32, 16), skyMaterial(6)));
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(90, 32),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(0x4b5048).multiplyScalar(SKY_BRIGHT * 0.55) }));
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -1.2;
+  env.add(ground);
+  scene.environment = pmrem.fromScene(env, 0.02).texture;
   pmrem.dispose();
 }
 
 scene.add(new THREE.HemisphereLight(0xdcecff, 0x5a7a45, 0.8));
 const sun = new THREE.DirectionalLight(0xfff1d8, 4.6);
 sun.castShadow = true;
-sun.shadow.mapSize.set(4096, 4096);
-Object.assign(sun.shadow.camera, { left: -60, right: 60, top: 60, bottom: -60, near: 1, far: 400 });
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -42, right: 42, top: 42, bottom: -42, near: 1, far: 400 });
 sun.shadow.bias = -0.0003;
-sun.shadow.normalBias = 0.04;
+sun.shadow.normalBias = 0.035;
 sun.shadow.radius = 2.5;
 scene.add(sun, sun.target);
 
@@ -108,7 +170,17 @@ function speckle(c, s, n, colors, max = 2.2) {
 }
 const asphaltTex = canvasTex(1024, (c, s) => {
   c.fillStyle = '#3c3f45'; c.fillRect(0, 0, s, s);
+  // 보수한 자국처럼 조금 더 어둡거나 밝은 얼룩
+  for (let i = 0; i < 14; i++) {
+    const x = rnd() * s, y = rnd() * s, r = s * (0.05 + rnd() * 0.12);
+    const g = c.createRadialGradient(x, y, 0, x, y, r);
+    const tone = rnd() > 0.5 ? '0,0,0' : '150,150,155';
+    g.addColorStop(0, `rgba(${tone},.10)`); g.addColorStop(1, `rgba(${tone},0)`);
+    c.fillStyle = g; c.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+  // 거친 골재 입자
   speckle(c, s, 90000, ['rgba(255,255,255,.07)', 'rgba(0,0,0,.14)', 'rgba(120,125,135,.12)', 'rgba(0,0,0,.08)']);
+  speckle(c, s, 6000, ['rgba(210,210,215,.22)', 'rgba(0,0,0,.3)'], 1.2);
   // 타이어가 자주 지나가는 자리는 살짝 어둡게
   for (const x of [0.3, 0.7]) {
     const g = c.createLinearGradient((x - 0.13) * s, 0, (x + 0.13) * s, 0);
@@ -123,7 +195,35 @@ const asphaltBump = canvasTex(512, (c, s) => {
 const grassTex = canvasTex(512, (c, s) => {
   c.fillStyle = '#5a9c46'; c.fillRect(0, 0, s, s);
   speckle(c, s, 50000, ['rgba(40,95,35,.35)', 'rgba(120,175,80,.3)', 'rgba(70,130,50,.35)', 'rgba(150,180,90,.14)'], 3);
+  // 풀잎 결: 짧은 획을 여러 방향으로
+  c.lineWidth = 1;
+  c.lineCap = 'round';
+  for (let i = 0; i < 14000; i++) {
+    const x = rnd() * s, y = rnd() * s, l = 3 + rnd() * 8, a = -0.6 + rnd() * 1.2;
+    c.strokeStyle = ['rgba(30,80,28,.38)', 'rgba(145,195,95,.30)', 'rgba(85,145,58,.35)'][(rnd() * 3) | 0];
+    c.beginPath(); c.moveTo(x, y); c.lineTo(x + Math.sin(a) * l, y - Math.cos(a) * l); c.stroke();
+  }
 }, { repeat: [300, 300] });
+
+// 타이어 스키드 자국 (투명 배경 위 검은 줄). 가로 = 도로 폭, 세로 = 30m
+const SKID_LEN = 30;
+const skidTex = canvasTex(1024, (c, s) => {
+  c.clearRect(0, 0, s, s);
+  for (let k = 0; k < 11; k++) {
+    const cx = s * (0.12 + rnd() * 0.76), y0 = rnd() * s * 0.5, len = s * (0.25 + rnd() * 0.5);
+    const gap = 125 * (0.9 + rnd() * 0.2);      // 좌우 바퀴 간격 (~1.6m)
+    const peak = 0.55 + rnd() * 0.4, drift = (rnd() - 0.5) * 60;
+    for (const off of [-gap / 2, gap / 2]) {
+      for (let y = 0; y < len; y += 2) {
+        const t = y / len;
+        const a = peak * Math.sin(Math.PI * t) ** 0.6 * (0.75 + rnd() * 0.25);
+        const x = cx + off + drift * t * t + (rnd() - 0.5) * 1.5;
+        c.fillStyle = `rgba(2,2,2,${a.toFixed(3)})`;
+        c.fillRect(x - 10, (y0 + y) % s, 20, 2);   // 아래로 넘치면 위에서 이어짐(타일 이음매 없음)
+      }
+    }
+  }
+});
 const concreteTex = canvasTex(256, (c, s) => {
   c.fillStyle = '#d9dcdf'; c.fillRect(0, 0, s, s);
   speckle(c, s, 9000, ['rgba(0,0,0,.06)', 'rgba(255,255,255,.25)', 'rgba(90,90,90,.06)'], 3);
@@ -187,7 +287,13 @@ function buildWorld() {
   ribbon(ROAD_HALF, 0.05, -ROAD_HALF, 0.05,
     std({ map: asphaltTex, bumpMap: asphaltBump, bumpScale: 0.6, roughness: 0.82, envMapIntensity: 0.5 }),
     { uv: [1, ROAD_HALF * 2] });
-  const white = std({ color: 0xe9e9e4, roughness: 0.7, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  // 코너 진입 구간(브레이크를 밟는 곳)에만 스키드 자국
+  const bend = (i) => { const a = T[(i - 4 + N) % N], b = T[(i + 4) % N]; return Math.acos(clamp(a.x * b.x + a.z * b.z, -1, 1)); };
+  const braking = (i) => { let m = 0; for (let k = 0; k <= 36; k += 3) m = Math.max(m, bend((i + k) % N)); return m > 0.2; };
+  ribbon(ROAD_HALF, 0.06, -ROAD_HALF, 0.06,
+    std({ map: skidTex, transparent: true, depthWrite: false, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }),
+    { uv: [1, SKID_LEN], filter: braking });
+  const white =std({ color: 0xe9e9e4, roughness: 0.7, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
   ribbon(ROAD_HALF - 0.3, 0.07, ROAD_HALF - 0.55, 0.07, white);
   ribbon(-ROAD_HALF + 0.55, 0.07, -ROAD_HALF + 0.3, 0.07, white);
   ribbon(0.13, 0.07, -0.13, 0.07, white, { filter: (i) => (i >> 2) % 2 === 0 });
@@ -374,7 +480,8 @@ function buildWorld() {
       c.fillStyle = g; c.fillRect(0, 0, s, s);
     }
   });
-  const cloudMat = new THREE.SpriteMaterial({ map: cloudTex, fog: false, depthWrite: false, opacity: 0.85, toneMapped: false });
+  const cloudMat = new THREE.SpriteMaterial({ map: cloudTex, fog: false, depthWrite: false, opacity: 0.85 });
+  cloudMat.color.setScalar(SKY_BRIGHT * 1.05);   // 하늘과 같은 밝기 기준
   for (let i = 0; i < 26; i++) {
     const sp = new THREE.Sprite(cloudMat);
     const a = rnd() * Math.PI * 2, d = 500 + rnd() * 1300, w = 380 + rnd() * 420;
@@ -393,11 +500,24 @@ const carBody = new THREE.Group();   // 기울어짐(롤/피치) 표현용
 const wheels = [];
 const frontPivots = [];
 let brakeLightMat;
+const exhaustTips = [];   // 배기구 끝 위치 (연기 파티클이 나오는 곳)
 function buildCar() {
-  const paint = new THREE.MeshPhysicalMaterial({ color: 0xb00014, metalness: 0.25, roughness: 0.4, clearcoat: 0.7, clearcoatRoughness: 0.08, envMapIntensity: 0.38 });
-  const carbon = new THREE.MeshStandardMaterial({ color: 0x0e1014, metalness: 0.5, roughness: 0.42 });
-  const glass = new THREE.MeshPhysicalMaterial({ color: 0x070b10, metalness: 0.95, roughness: 0.05, clearcoat: 1, envMapIntensity: 1.8 });
-  const chrome = new THREE.MeshStandardMaterial({ color: 0xe3e7ec, metalness: 1, roughness: 0.16 });
+  // 고광택 메탈릭 레드 + 클리어코트: 하늘과 도로가 은은하게 비친다
+  const paint = new THREE.MeshPhysicalMaterial({ color: 0xa8000f, metalness: 0.6, roughness: 0.2, clearcoat: 1.0, clearcoatRoughness: 0.03, envMapIntensity: 0.85 });
+  // 카본: 능직(트윌) 무늬 + 클리어코트
+  const weave = canvasTex(128, (c, s) => {
+    const q = s / 8;
+    for (let x = 0; x < 8; x++) for (let y = 0; y < 8; y++) {
+      const on = ((x + y) >> 1) % 2 === 0;
+      const g = on ? c.createLinearGradient(x * q, 0, x * q + q, 0) : c.createLinearGradient(0, y * q, 0, y * q + q);
+      g.addColorStop(0, on ? '#1b1d22' : '#0c0d10'); g.addColorStop(0.5, on ? '#3a3e46' : '#22252b'); g.addColorStop(1, on ? '#1b1d22' : '#0c0d10');
+      c.fillStyle = g; c.fillRect(x * q, y * q, q, q);
+    }
+  }, { repeat: [6, 2] });
+  const carbon = new THREE.MeshPhysicalMaterial({ map: weave, metalness: 0.35, roughness: 0.32, clearcoat: 1, clearcoatRoughness: 0.08, envMapIntensity: 0.9 });
+  const matte = new THREE.MeshStandardMaterial({ color: 0x0b0c0e, metalness: 0.05, roughness: 0.88 });   // 무광 블랙 (범퍼 하단)
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0x05080c, metalness: 0.9, roughness: 0.04, clearcoat: 1, envMapIntensity: 1.6 });
+  const chrome = new THREE.MeshStandardMaterial({ color: 0xeef1f5, metalness: 1, roughness: 0.12, envMapIntensity: 1.3 });
   const rubber = new THREE.MeshStandardMaterial({ color: 0x0c0c0d, roughness: 0.88 });
   const add = (geo, mat, x = 0, y = 0, z = 0, parent = carBody) => {
     const m = new THREE.Mesh(geo, mat);
@@ -441,27 +561,76 @@ function buildCar() {
   add(extrudeSide(c, 1.5, 0.14), glass);
   add(rbox(1.16, 0.05, 0.86, 0.02), paint, 0, 1.375, -0.42);      // 지붕 패널
 
-  add(new THREE.BoxGeometry(1.5, 0.42, 4.0), carbon, 0, 0.5, 0);    // 바닥/휠하우스 안쪽
+  add(new THREE.BoxGeometry(1.5, 0.42, 4.0), matte, 0, 0.5, 0);     // 바닥/휠하우스 안쪽
   add(rbox(1.84, 0.05, 0.5, 0.02), carbon, 0, 0.27, 2.02);          // 프런트 스플리터
-  add(rbox(1.3, 0.2, 0.08), carbon, 0, 0.46, 2.2);                  // 그릴
+  add(rbox(1.3, 0.2, 0.08), matte, 0, 0.46, 2.2);                   // 그릴
   for (const s of [1, -1]) {
     add(rbox(0.08, 0.1, 1.84, 0.02), carbon, s * 0.9, 0.31, 0);     // 사이드 스커트
     add(rbox(0.2, 0.11, 0.14, 0.04), paint, s * 0.98, 1.0, 0.62);   // 사이드 미러
     add(rbox(0.06, 0.28, 0.24, 0.02), carbon, s * 0.62, 1.1, -1.95);// 스포일러 기둥
-    const ex = add(new THREE.CylinderGeometry(0.07, 0.07, 0.18, 14), chrome, s * 0.5, 0.36, -2.14);
-    ex.rotation.x = Math.PI / 2;
   }
   add(rbox(1.76, 0.05, 0.4, 0.02), carbon, 0, 1.26, -1.97);         // 스포일러 날개
-  add(rbox(1.5, 0.12, 0.3, 0.03), carbon, 0, 0.3, -2.02);           // 디퓨저
+  for (const s of [1, -1]) add(rbox(0.03, 0.16, 0.44, 0.012), carbon, s * 0.88, 1.27, -1.97);  // 날개 끝판
 
-  const lamp = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff4d0, emissiveIntensity: 2.2, roughness: 0.2 });
+  const lamp = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xfff4d0, emissiveIntensity: 3, roughness: 0.2 });
   for (const s of [1, -1]) {
     const h = add(rbox(0.46, 0.1, 0.2, 0.04), lamp, s * 0.6, 0.7, 2.02);
     h.rotation.x = 0.45;
     h.castShadow = false;
   }
-  brakeLightMat = new THREE.MeshStandardMaterial({ color: 0x3a0004, emissive: 0xff0a18, emissiveIntensity: 0.5, roughness: 0.3 });
-  add(rbox(1.62, 0.09, 0.08, 0.03), brakeLightMat, 0, 0.8, -2.235).castShadow = false;
+
+  // ---- 후면부 ----
+  // 가로로 길게 이어진 입체 LED 테일램프: 스모크 렌즈 하우징 + 발광 띠 + 양 끝 ㄱ자 그래픽
+  brakeLightMat = new THREE.MeshStandardMaterial({ color: 0x1a0002, emissive: 0xff0814, emissiveIntensity: 1.2, roughness: 0.25 });
+  const smoked = new THREE.MeshPhysicalMaterial({ color: 0x14040a, metalness: 0.2, roughness: 0.08, clearcoat: 1, envMapIntensity: 1.2 });
+  add(rbox(1.76, 0.15, 0.07, 0.035), smoked, 0, 0.8, -2.215);
+  const led = (w, h, x, y) => { const m = add(rbox(w, h, 0.035, Math.min(w, h) * 0.45), brakeLightMat, x, y, -2.255); m.castShadow = false; return m; };
+  led(1.5, 0.032, 0, 0.815);                  // 가운데 가로 띠
+  for (const s of [1, -1]) {
+    led(0.26, 0.05, s * 0.72, 0.83);          // 양 끝 위쪽
+    led(0.05, 0.12, s * 0.835, 0.78);         // 양 끝 세로
+    led(0.18, 0.025, s * 0.7, 0.765);         // 양 끝 아래쪽
+  }
+
+  // 하단 리어 범퍼(무광) + 디퓨저(카본, 세로 핀)
+  add(rbox(1.78, 0.17, 0.16, 0.04), matte, 0, 0.44, -2.17);
+  const diffuser = add(rbox(1.56, 0.05, 0.5, 0.02), carbon, 0, 0.25, -2.0);
+  diffuser.rotation.x = -0.22;
+  for (const x of [-0.27, -0.13, 0, 0.13, 0.27]) {
+    const fin = add(new THREE.BoxGeometry(0.022, 0.1, 0.42), carbon, x, 0.31, -2.03);
+    fin.rotation.x = -0.22;
+  }
+
+  // 크롬 듀얼 머플러: 바깥 관 + 둥근 립 + 안쪽은 검은 그을음
+  const pipeGeo = new THREE.CylinderGeometry(0.078, 0.07, 0.26, 28, 1, true);
+  pipeGeo.rotateX(Math.PI / 2);
+  const lipGeo = new THREE.TorusGeometry(0.078, 0.012, 10, 28);
+  const soot = new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 1, side: THREE.DoubleSide });
+  for (const s of [1, -1]) {
+    const x = s * 0.5, y = 0.34;
+    add(pipeGeo, new THREE.MeshStandardMaterial({ color: 0xeef1f5, metalness: 1, roughness: 0.12, envMapIntensity: 1.3, side: THREE.DoubleSide }), x, y, -2.17);
+    add(lipGeo, chrome, x, y, -2.3);
+    add(new THREE.CircleGeometry(0.068, 24), soot, x, y, -2.25).rotation.y = Math.PI;
+    add(rbox(0.26, 0.2, 0.06, 0.04), matte, x, y, -2.16);             // 배기구 주변 검은 테두리
+    const tip = new THREE.Object3D();
+    tip.position.set(x, y, -2.34);
+    carBody.add(tip);
+    exhaustTips.push(tip);
+  }
+
+  // 차 바로 아래의 부드러운 접지 그림자 (차가 바닥에 붙어 보이게)
+  const contactTex = canvasTex(256, (c, s) => {
+    const g = c.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+    g.addColorStop(0, 'rgba(0,0,0,0.9)'); g.addColorStop(0.5, 'rgba(0,0,0,0.65)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    c.fillStyle = g; c.fillRect(0, 0, s, s);
+  });
+  contactTex.wrapS = contactTex.wrapT = THREE.ClampToEdgeWrapping;
+  const contact = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 5.2),
+    new THREE.MeshBasicMaterial({ map: contactTex, transparent: true, opacity: 0.8, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }));
+  contact.rotation.x = -Math.PI / 2;
+  contact.position.y = 0.08;
+  contact.renderOrder = 1;
+  carObj.add(contact);
 
   // 바퀴
   const tireGeo = new THREE.LatheGeometry(
@@ -502,7 +671,7 @@ function updateLamps() {
   else if (race.state === 'racing' && goFlash > 0) { lit = 5; green = true; }
   startLamps.forEach((m, i) => {
     m.emissive.setHex(green ? 0x18ff5a : 0xff1a1a);
-    m.emissiveIntensity = i < lit ? 4 : 0;
+    m.emissiveIntensity = i < lit ? 12 : 0;   // Bloom 으로 번지도록 밝게
   });
 }
 
@@ -769,22 +938,25 @@ function updateCamera(dt) {
   bump = Math.max(0, bump - dt * 3);
   const shake = bump * 0.35 * Math.sin(performance.now() * 0.08);
   camera.up.set(0, 1, 0);
+  let fov;   // 속도가 오를수록 시야각이 조금씩 넓어져 속도감이 난다
   if (camMode === 0) {
     const cx = Math.sin(camH), cz = Math.cos(camH), dist = 7.5 + sp * 0.035;
     camera.position.set(car.x - cx * dist + shake, 3.1, car.z - cz * dist);
     camera.lookAt(car.x + fx * 5, 1.1, car.z + fz * 5);
-    camera.fov = 60 + sp * 0.28;
+    fov = 60 + sp * 0.22;
   } else if (camMode === 1) {
     camera.position.set(car.x + fx * 0.2 + shake, 1.22, car.z + fz * 0.2);
     camera.lookAt(car.x + fx * 20, 1.0, car.z + fz * 20);
-    camera.fov = 72 + sp * 0.2;
+    fov = 72 + sp * 0.16;
   } else {
     camera.up.set(Math.sin(camH), 0, Math.cos(camH));
     camera.position.set(car.x, 70, car.z);
     camera.lookAt(car.x, 0, car.z);
-    camera.fov = 55;
+    fov = 55;
   }
+  camera.fov = lerp(camera.fov, fov, 1 - Math.exp(-dt * 4));   // 부드럽게 따라감
   camera.updateProjectionMatrix();
+  skyDome.position.copy(camera.position);
   sun.position.set(car.x + SUN_DIR.x * 200, SUN_DIR.y * 200, car.z + SUN_DIR.z * 200);
   sun.target.position.set(car.x, 0, car.z);
 }
@@ -803,7 +975,91 @@ function updateCarModel(dt) {
   const pitch = clamp(car.brake * sp * 0.003 - car.throttle * 0.012, -0.03, 0.05);
   carBody.rotation.z = lerp(carBody.rotation.z, roll, 0.15);
   carBody.rotation.x = lerp(carBody.rotation.x, pitch, 0.15);
-  brakeLightMat.emissiveIntensity = car.brake > 0.05 ? 3 : 0.25;
+  // 테일램프: 평소엔 은은하게, 악셀을 떼고 감속하면 조금 밝게, 브레이크를 밟으면 강하게 (Bloom 으로 번짐)
+  const coasting = car.throttle < 0.05 && sp > 3 && race.state === 'racing';
+  const glow = car.brake > 0.05 ? 9 : coasting ? 3.2 : 1.2;
+  brakeLightMat.emissiveIntensity = lerp(brakeLightMat.emissiveIntensity, glow, 1 - Math.exp(-dt * 18));
+}
+
+// ====================================================================
+// 배기 연기 파티클
+// ====================================================================
+const SMOKE_MAX = 220;
+const smoke = [];
+const smokePos = new Float32Array(SMOKE_MAX * 3), smokeSize = new Float32Array(SMOKE_MAX), smokeAlpha = new Float32Array(SMOKE_MAX);
+const smokeGeo = new THREE.BufferGeometry();
+smokeGeo.setAttribute('position', new THREE.BufferAttribute(smokePos, 3).setUsage(THREE.DynamicDrawUsage));
+smokeGeo.setAttribute('aSize', new THREE.BufferAttribute(smokeSize, 1).setUsage(THREE.DynamicDrawUsage));
+smokeGeo.setAttribute('aAlpha', new THREE.BufferAttribute(smokeAlpha, 1).setUsage(THREE.DynamicDrawUsage));
+const smokeTex = canvasTex(64, (c, s) => {
+  const g = c.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  g.addColorStop(0, 'rgba(255,255,255,.8)'); g.addColorStop(0.4, 'rgba(255,255,255,.4)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  c.fillStyle = g; c.fillRect(0, 0, s, s);
+});
+smokeTex.wrapS = smokeTex.wrapT = THREE.ClampToEdgeWrapping;
+const smokeMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false,
+  uniforms: { map: { value: smokeTex }, color: { value: new THREE.Color(0xc9ced6).multiplyScalar(1.25) }, uScale: { value: 500 } },
+  vertexShader: /* glsl */`
+    attribute float aSize; attribute float aAlpha; varying float vA; uniform float uScale;
+    void main() {
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = aSize * uScale / -mv.z;
+      gl_Position = projectionMatrix * mv;
+      vA = aAlpha;
+    }`,
+  fragmentShader: /* glsl */`
+    uniform sampler2D map; uniform vec3 color; varying float vA;
+    void main() { gl_FragColor = vec4(color, texture2D(map, gl_PointCoord).a * vA); }`,
+});
+const smokePoints = new THREE.Points(smokeGeo, smokeMat);
+smokePoints.frustumCulled = false;
+smokePoints.renderOrder = 2;
+scene.add(smokePoints);
+
+let smokeAcc = 0;
+const tipPos = new THREE.Vector3();
+function updateSmoke(dt) {
+  carObj.updateMatrixWorld();
+  // 악셀을 밟을수록, 회전수가 높을수록 많이 나온다
+  const rate = car.throttle > 0.1 ? (14 + 70 * car.throttle * (car.rpm / REDLINE)) : (Math.abs(car.v) < 1 ? 3 : 0);
+  smokeAcc += rate * dt;
+  const fx = Math.sin(car.h), fz = Math.cos(car.h);
+  while (smokeAcc >= 1) {
+    smokeAcc -= 1;
+    for (const tip of exhaustTips) {
+      if (smoke.length >= SMOKE_MAX) smoke.shift();
+      tip.getWorldPosition(tipPos);
+      const back = 1.2 + rnd() * 1.5;
+      smoke.push({
+        x: tipPos.x, y: tipPos.y, z: tipPos.z,
+        vx: fx * (car.v * 0.25 - back) + (rnd() - 0.5) * 0.6,
+        vy: 0.25 + rnd() * 0.45,
+        vz: fz * (car.v * 0.25 - back) + (rnd() - 0.5) * 0.6,
+        age: 0, life: 0.9 + rnd() * 0.8, a0: 0.1 + 0.2 * car.throttle,
+      });
+    }
+  }
+  let n = 0;
+  for (let i = smoke.length - 1; i >= 0; i--) {
+    const p = smoke[i];
+    p.age += dt;
+    if (p.age >= p.life) { smoke.splice(i, 1); continue; }
+    const drag = Math.exp(-dt * 2.2);
+    p.vx *= drag; p.vz *= drag; p.vy += dt * 0.15;
+    p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
+    const t = p.age / p.life;
+    smokePos[n * 3] = p.x; smokePos[n * 3 + 1] = p.y; smokePos[n * 3 + 2] = p.z;
+    smokeSize[n] = 0.35 + t * 2.2;
+    smokeAlpha[n] = p.a0 * Math.min(1, t * 8) * (1 - t) * (1 - t);
+    n++;
+  }
+  smokeGeo.setDrawRange(0, n);
+  smokeGeo.attributes.position.needsUpdate = true;
+  smokeGeo.attributes.aSize.needsUpdate = true;
+  smokeGeo.attributes.aAlpha.needsUpdate = true;
+  // 화면 높이에 맞춘 점 크기 배율 (원근감)
+  smokeMat.uniforms.uScale.value = renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
 }
 
 // ====================================================================
@@ -1000,12 +1256,13 @@ function frame(now) {
   updateCarModel(dt);
   updateLamps();
   updateCamera(dt);
+  updateSmoke(dt);
   updateHUD();
   updateAudio();
-  renderer.render(scene, camera);
+  composer.render(dt);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
 
 // 테스트/디버깅용
-window.__car = { car, race, phone, startCountdown, resetRace, shift, setMode, TRACK_LEN, P, T, N, input, physics, raceUpdate, camera, scene, renderer };
+window.__car = { car, race, phone, startCountdown, resetRace, shift, setMode, TRACK_LEN, P, T, N, input, physics, raceUpdate, camera, scene, renderer, composer, bloom, brakeLightMat: () => brakeLightMat, smoke, updateSmoke, updateCarModel, updateCamera };
