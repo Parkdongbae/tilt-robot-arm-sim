@@ -835,11 +835,18 @@ function physics(dt) {
   if (sv !== 0 && Math.sign(v) === -sv && car.throttle < 0.05) v = 0; // 저항으로 뒤로 밀리지 않게
   car.v = v;
 
-  // 조향: 저속은 바퀴 각도, 고속은 타이어 접지력이 한계
+  // 조향: 저속은 바퀴 각도(최소 회전반경 4.2m), 고속은 타이어 접지력(횡가속도 GRIP)이 한계.
+  // 핸들을 끝까지 돌리면 어떤 속도에서든 접지력을 다 써서 돈다.
   const sp = Math.abs(car.v);
-  const grip = offroad ? 7 : 13.5;
-  const yawMax = sp < 0.05 ? 0 : 1 / (2.6 / (sp * 0.62) + sp / grip);
+  const GRIP = offroad ? 10 : 24;                       // 최대 횡가속도 (m/s²)
+  const geomYaw = sp / 4.2, gripYaw = GRIP / Math.max(sp, 0.1);
+  const yawMax = sp < 0.05 ? 0 : Math.min(geomYaw, gripYaw);
   car.h -= car.steer * yawMax * Math.sign(car.v) * dt;
+  // 접지 한계에서 핸들을 거의 끝까지 꺾으면 타이어가 미끄러지며 속도가 줄어 → 더 작게 돈다 (코너 보조)
+  if (gripYaw < geomYaw && Math.abs(car.steer) > 0.7) {
+    const scrub = 10 * (Math.abs(car.steer) - 0.7) / 0.3;
+    car.v -= Math.sign(car.v) * Math.min(Math.abs(car.v), scrub * dt);
+  }
   car.slip = sp > 14 ? clamp((Math.abs(car.steer) - 0.8) / 0.2, 0, 1) : 0;
 
   car.x += Math.sin(car.h) * car.v * dt;
