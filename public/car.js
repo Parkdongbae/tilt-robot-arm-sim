@@ -8,6 +8,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { createDisplayLink } from './car-link.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -1177,9 +1178,10 @@ function updateAudio() {
 // ====================================================================
 // 통신
 // ====================================================================
-let ws = null, phoneConnected = false;
+// 로컬 서버면 WebSocket, Vercel 등에서는 P2P (car-link.js)
+let link = null, phoneConnected = false;
 function feedback(obj) {
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'feedback', ...obj }));
+  if (link) link.send({ type: 'feedback', ...obj });
 }
 function handleEvent(name, value) {
   if (name === 'shiftUp') shift(1);
@@ -1190,18 +1192,14 @@ function handleEvent(name, value) {
   else if (name === 'restart') { resetRace(); startCountdown(); }
   else if (name === 'start') startCountdown();
 }
-function connect() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = () => ws.send(JSON.stringify({ type: 'hello', role: 'display' }));
-  ws.onmessage = (e) => {
-    let m;
-    try { m = JSON.parse(e.data); } catch { return; }
-    if (m.type === 'status') {
-      phoneConnected = !!m.phone;
-      $('connect').classList.toggle('hidden', phoneConnected);
-      $('phoneState').classList.toggle('on', phoneConnected);
-    } else if (m.type === 'car') {
+createDisplayLink({
+  onPhone: (on) => {
+    phoneConnected = on;
+    $('connect').classList.toggle('hidden', on);
+    $('phoneState').classList.toggle('on', on);
+  },
+  onMessage: (m) => {
+    if (m.type === 'car') {
       phone.steer = clamp(+m.steer || 0, -1, 1);
       phone.throttle = clamp(+m.throttle || 0, 0, 1);
       phone.brake = clamp(+m.brake || 0, 0, 1);
@@ -1209,11 +1207,14 @@ function connect() {
     } else if (m.type === 'carEvent') {
       handleEvent(m.name, m.value);
     }
-  };
-  ws.onclose = () => setTimeout(connect, 1000);
-  ws.onerror = () => ws.close();
-}
-connect();
+  },
+  onQR: ({ svg, url }) => {
+    $('qr').innerHTML = svg;
+    $('url').textContent = url;
+  },
+  onError: (text) => { $('url').textContent = text; },
+}).then((l) => { link = l; })
+  .catch(() => { $('url').textContent = '폰 연결 기능을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요. (키보드로는 플레이 가능)'; });
 
 // 폰에 차량 상태를 10Hz로 알려 줌
 setInterval(() => {
@@ -1223,10 +1224,6 @@ setInterval(() => {
   } });
 }, 100);
 
-fetch('/api/info').then((r) => r.json()).then((info) => {
-  $('qr').innerHTML = info.carPhoneQR || '';
-  $('url').textContent = info.carPhone || '';
-}).catch(() => { $('url').textContent = '서버 정보를 가져오지 못했습니다'; });
 
 // ====================================================================
 // 키보드

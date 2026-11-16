@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "echo \"정적 사이트: 설치할 것 없음\"",
+  "buildCommand": "",
+  "outputDirectory": "public",
+  "cleanUrls": false,
+  "rewrites": [
+    { "source": "/", "destination": "/home.html" },
+    { "source": "/vendor/three/:path*", "destination": "https://cdn.jsdelivr.net/npm/three@0.160.0/:path*" }
+  ]
+}

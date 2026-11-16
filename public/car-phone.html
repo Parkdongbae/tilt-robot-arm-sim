@@ -139,35 +139,32 @@ function toast(t) {
   toast.t = setTimeout(() => $('toast').classList.remove('show'), 1600);
 }
 
-// ---------------- 서버 연결 ----------------
-let ws = null;
-function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
-function connect() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = () => {
-    ws.send(JSON.stringify({ type: 'hello', role: 'phone' }));
-    $('dServer').classList.add('on');
-    if (started) send({ type: 'carEvent', name: 'setMode', value: mode });
-  };
-  ws.onmessage = (e) => {
-    let m;
-    try { m = JSON.parse(e.data); } catch { return; }
-    if (m.type === 'status') $('dDisplay').classList.toggle('on', !!m.display);
+// ---------------- PC 연결 (로컬 서버면 WebSocket, Vercel 등에서는 P2P: car-link.js) ----------------
+let link = null;
+function send(obj) { if (link) link.send(obj); }
+let pcOn = false, startSent = false;
+import('./car-link.js').then(({ createPhoneLink }) => createPhoneLink({
+  onStatus: ({ server, display }) => {
+    $('dServer').classList.toggle('on', server);
+    $('dDisplay').classList.toggle('on', display);
+    const justConnected = display && !pcOn;
+    pcOn = display;
+    if (justConnected && started) {
+      send({ type: 'carEvent', name: 'setMode', value: mode });   // 다시 연결되면 변속 방식 맞춤
+      if (!startSent) { send({ type: 'carEvent', name: 'start' }); startSent = true; }
+    }
+  },
+  onMessage: (m) => {
     if (m.type === 'feedback') {
       if (m.vibrate) buzz(m.vibrate);
       if (m.text) toast(m.text);
       if (m.car) showCar(m.car);
     }
-  };
-  ws.onclose = () => {
-    $('dServer').classList.remove('on');
-    $('dDisplay').classList.remove('on');
-    setTimeout(connect, 1000);
-  };
-  ws.onerror = () => ws.close();
-}
-connect();
+  },
+})).then((l) => {
+  link = l;
+  if (l.error) $('startErr').textContent = l.error;
+}).catch(() => { $('startErr').textContent = '연결 기능을 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.'; });
 
 // ---------------- 상태 ----------------
 let started = false;
@@ -315,7 +312,7 @@ $('btnStart').onclick = async () => {
   document.body.classList.add('started');
   $('overlay').style.display = 'none';
   send({ type: 'carEvent', name: 'setMode', value: mode });
-  send({ type: 'carEvent', name: 'start' });
+  if (pcOn) { send({ type: 'carEvent', name: 'start' }); startSent = true; }   // PC가 아직이면 연결되는 순간 보냄
 
   setTimeout(() => {
     if (!sensorOk) {
