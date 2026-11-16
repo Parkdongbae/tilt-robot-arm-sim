@@ -6,7 +6,16 @@
   "outputDirectory": "public",
   "cleanUrls": false,
   "rewrites": [
-    { "source": "/", "destination": "/home.html" },
-    { "source": "/vendor/three/:path*", "destination": "https://cdn.jsdelivr.net/npm/three@0.160.0/:path*" }
+    {
+      "source": "/vendor/three/:path*",
+      "destination": "https://cdn.jsdelivr.net/npm/three@0.160.0/:path*"
+    }
+  ],
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "/home.html",
+      "permanent": false
+    }
   ]
 }
